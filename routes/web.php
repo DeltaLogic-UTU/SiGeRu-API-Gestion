@@ -8,11 +8,8 @@ use App\Http\Controllers\IncidenciaController;
 use App\Http\Controllers\CamionController;
 use App\Http\Controllers\ReclamoController;
 
-Route::get('/csrf-token', function () {
-    return response()->json([
-        'token' => csrf_token()
-    ]);
-});
+// Se eliminó la ruta GET '/csrf-token' porque las APIs
+
 
 Route::get(
     '/api/cuadrillas',

@@ -1,9 +1,9 @@
 <?php
 
 return [
+    //se elimino token CSRF
     'paths' => [
-        'api/*',
-        'csrf-token'
+        'api/*'
     ],
 
     'allowed_methods' => ['*'],
