@@ -16,4 +16,22 @@ class Usuario extends Model
         'apellido',
         'estado'
     ];
+
+    public function rol()
+    {
+        return $this->belongsTo(
+            Rol::class,
+            'id_rol',
+            'id_rol'
+        );
+    }
+
+    public function datos()
+    {
+        return $this->hasOne(
+            Dato::class,
+            'id_usuario',
+            'id_usuario'
+        );
+    }
 }
