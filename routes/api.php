@@ -14,6 +14,12 @@ Route::get('health', fn () => response()->json([
     'message' => 'API Gestion running',
 ]));
 
+// Ruta pública para mostrar los contenedores en el mapa de la landing page
+Route::get(
+    'mapa/contenedores',
+    [ContenedorController::class, 'index']
+);
+
 // Rutas protegidas con el middleware auth:api (requieren Authorization: Bearer <token>).
 Route::middleware('auth:api')->group(function () {
 
