@@ -939,11 +939,45 @@ class ContenedorController extends Controller
         }
 
         if ($request->has('estado')) {
-            $datos['estado'] = strtolower(
+            $estado = strtolower(
                 trim(
                     (string) $request->estado
                 )
             );
+
+            // Si desde el mapa se envía "funcionando", lo guardamos como "funcional"
+            if ($estado === 'funcionando') {
+                $estado = 'funcional';
+            }
+
+            $datos['estado'] = $estado;
+        }
+
+        // Si se crea desde el mapa con latitud y longitud, completamos circuito, municipio, calle y primer día automáticamente
+        if (
+            $request->filled('latitud') &&
+            $request->filled('longitud')
+        ) {
+            $autoZona = $this->detectarCircuitoPorCoordenadas(
+                (float) $request->latitud,
+                (float) $request->longitud
+            );
+
+            if (!$request->filled('circuito')) {
+                $datos['circuito'] = $autoZona['circuito'];
+            }
+
+            if (!$request->filled('municipio')) {
+                $datos['municipio'] = $autoZona['municipio'];
+            }
+
+            if (!$request->filled('calle')) {
+                $datos['calle'] = 'Punto en mapa (' . ($datos['circuito'] ?? $autoZona['circuito']) . ')';
+            }
+
+            if (!$request->filled('dias_sin_recoleccion')) {
+                $datos['dias_sin_recoleccion'] = 1;
+            }
         }
 
         if ($request->has('circuito')) {
@@ -1015,6 +1049,27 @@ class ContenedorController extends Controller
                 $datos['barrio']
             )
             : null;
+
+        // Si se está creando un punto directamente en el mapa con coordenadas, creamos su ubicación propia
+        if (
+            !empty($datos['latitud']) &&
+            !empty($datos['longitud'])
+        ) {
+            return DB::table('ubicacion')
+                ->insertGetId([
+                    'calle' => $calle,
+                    'esquina_1' => $esquina1 ?: null,
+                    'esquina_2' => $esquina2 ?: null,
+                    'municipio' => $municipio,
+                    'barrio' => $barrio ?: 'Zona ' . $municipio,
+                    'descripcion' =>
+                        $datos['descripcion'] ?? 'Creado desde el mapa interactivo',
+                    'latitud' =>
+                        $datos['latitud'],
+                    'longitud' =>
+                        $datos['longitud']
+                ]);
+        }
 
         $existente = DB::table('ubicacion')
             ->where('calle', $calle)
@@ -1271,6 +1326,7 @@ class ContenedorController extends Controller
             ->diffInDays($hoy);
     }
 
+    // Escala de 5 colores según los días que lleva el contenedor sin ser recolectado
     private function nivelDesdeDias(
         int $dias
     ): string {
@@ -1278,11 +1334,63 @@ class ContenedorController extends Controller
             return 'verde';
         }
 
-        if ($dias <= 5) {
+        if ($dias === 3) {
             return 'amarillo';
         }
 
-        return 'rojo';
+        if ($dias === 4) {
+            return 'naranja';
+        }
+
+        if ($dias === 5) {
+            return 'rojo';
+        }
+
+        return 'negro';
+    }
+
+    // Detecta de forma simple el circuito y municipio según la latitud y longitud elegida en el mapa
+    private function detectarCircuitoPorCoordenadas(
+        float $lat,
+        float $lng
+    ): array {
+        // Zona oeste (Cerro / La Teja) -> Municipio A
+        if ($lng < -56.20) {
+            return ['municipio' => 'A', 'circuito' => 'A_101'];
+        }
+
+        // Zona norte (Sayago / Colón) -> Municipio G
+        if ($lat > -34.84 && $lng < -56.17) {
+            return ['municipio' => 'G', 'circuito' => 'G_101'];
+        }
+
+        // Zona noreste (Maroñas / Piedras Blancas) -> Municipio F
+        if ($lat > -34.86 && $lng >= -56.14) {
+            return ['municipio' => 'F', 'circuito' => 'F_101'];
+        }
+
+        // Zona central norte (Cerrito / Unión) -> Municipio D
+        if ($lat > -34.875 && $lng >= -56.175) {
+            return ['municipio' => 'D', 'circuito' => 'D_101'];
+        }
+
+        // Zona Prado / Aguada -> Municipio C
+        if ($lat > -34.89 && $lng < -56.175) {
+            return ['municipio' => 'C', 'circuito' => 'C_102'];
+        }
+
+        // Zona este costera (Malvín / Carrasco) -> Municipio E
+        if ($lng >= -56.125) {
+            return ['municipio' => 'E', 'circuito' => 'E_102'];
+        }
+
+        // Zona Pocitos / Punta Carretas / Buceo -> Municipio CH
+        if ($lng >= -56.168) {
+            return ['municipio' => 'CH', 'circuito' => 'CH_102'];
+        }
+
+        // Zona Centro / Cordón / Ciudad Vieja (por defecto) -> Municipio B
+        return ['municipio' => 'B', 'circuito' => 'B_01'];
     }
 
     private function etiquetaDias(
