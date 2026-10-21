@@ -7,6 +7,7 @@ use App\Http\Controllers\InstalacionController;
 use App\Http\Controllers\IncidenciaController;
 use App\Http\Controllers\CamionController;
 use App\Http\Controllers\ReclamoController;
+use App\Http\Controllers\CircuitoController;
 
 // Ruta pública de comprobación (no requiere token JWT).
 Route::get('health', fn () => response()->json([
@@ -14,14 +15,34 @@ Route::get('health', fn () => response()->json([
     'message' => 'API Gestion running',
 ]));
 
-// Ruta pública para mostrar los contenedores en el mapa de la landing page
+// Rutas públicas para mostrar contenedores y circuitos delimitados en el mapa
 Route::get(
     'mapa/contenedores',
     [ContenedorController::class, 'index']
 );
 
+Route::get(
+    'mapa/circuitos',
+    [CircuitoController::class, 'index']
+);
+
 // Rutas protegidas con el middleware auth:api (requieren Authorization: Bearer <token>).
 Route::middleware('auth:api')->group(function () {
+
+    Route::get(
+        'circuitos',
+        [CircuitoController::class, 'index']
+    );
+
+    Route::post(
+        'circuitos',
+        [CircuitoController::class, 'store']
+    );
+
+    Route::get(
+        'circuitos/{id}',
+        [CircuitoController::class, 'show']
+    )->where('id', '[A-Za-z0-9_-]+');
 
     Route::get(
         'cuadrillas',
