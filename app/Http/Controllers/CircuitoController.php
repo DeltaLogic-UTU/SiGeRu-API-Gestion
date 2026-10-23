@@ -17,7 +17,6 @@ class CircuitoController extends Controller
             ->pluck('total', 'circuito');
 
         $circuitos = DB::table('circuitos')
-            ->orderBy('municipio')
             ->orderBy('id_circuito')
             ->get()
             ->map(function ($item) use ($conteos) {
@@ -51,14 +50,14 @@ class CircuitoController extends Controller
     {
         $validated = $request->validate([
             'id_circuito' => 'required|string|max:30',
-            'municipio' => 'required|string|max:100',
+            'municipio' => 'nullable|string|max:100',
             'zona' => 'nullable|string|max:100',
             'descripcion' => 'nullable|string',
             'coordenadas' => 'required'
         ]);
 
         $codigo = strtoupper(trim($validated['id_circuito']));
-        $municipio = strtoupper(trim($validated['municipio']));
+        $municipio = !empty($validated['municipio']) ? strtoupper(trim($validated['municipio'])) : 'Montevideo';
         $zona = !empty($validated['zona']) ? trim($validated['zona']) : null;
         $descripcion = !empty($validated['descripcion']) ? trim($validated['descripcion']) : null;
 
