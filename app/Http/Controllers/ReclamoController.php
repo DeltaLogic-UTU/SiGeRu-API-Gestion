@@ -5,9 +5,143 @@ namespace App\Http\Controllers;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\DB;
 use Illuminate\Validation\Rule;
+use Illuminate\Support\Facades\Storage;
+use Illuminate\Support\Str;
 
 class ReclamoController extends Controller
 {
+    public function store(Request $request)
+    {
+    $dato = auth('api')->user();
+
+    if (!$dato) {
+        return response()->json([
+            'success' => false,
+            'message' => 'Usuario no autenticado.'
+        ], 401);
+    }
+
+    $usuario = $dato->usuario;
+
+    $rol = strtolower(trim(
+        (string) ($usuario?->rol?->nombre ?? '')
+    ));
+
+    if ($rol !== 'vecino') {
+        return response()->json([
+            'success' => false,
+            'message' => 'Solo los vecinos pueden enviar reclamos.'
+        ], 403);
+    }
+
+    $datos = $request->validate([
+        'tipo' => [
+            'required',
+            'string',
+            Rule::in([
+                'Contenedor desbordado',
+                'Contenedor roto',
+                'Residuos fuera de lugar',
+                'Demora en la recolección'
+            ])
+        ],
+        'categoria' => [
+            'required',
+            'string',
+            Rule::in([
+                'Contenedores',
+                'Residuos',
+                'Recolección'
+            ])
+        ],
+        'zona' => [
+            'required',
+            'string',
+            'max:150'
+        ],
+        'referencia' => [
+            'required',
+            'string',
+            'max:200'
+        ],
+        'descripcion' => [
+            'required',
+            'string'
+        ],
+        'foto' => [
+            'nullable',
+            'image'
+        ]
+    ]);
+
+    $categorias = [
+        'Contenedor desbordado' => 'Contenedores',
+        'Contenedor roto' => 'Contenedores',
+        'Residuos fuera de lugar' => 'Residuos',
+        'Demora en la recolección' => 'Recolección'
+    ];
+
+    $categoria = $categorias[$datos['tipo']];
+
+    if ($datos['categoria'] !== $categoria) {
+        return response()->json([
+            'success' => false,
+            'message' => 'La categoría no corresponde al tipo de reclamo.'
+        ], 422);
+    }
+
+    $id = 'REC-' . Str::upper(Str::random(20));
+
+    $foto = null;
+
+    if ($request->hasFile('foto')) {
+        $ruta = $request->file('foto')
+            ->store('reclamos', 'public');
+
+        $foto = Storage::disk('public')->url($ruta);
+    }
+
+    try {
+        DB::table('reclamos')->insert([
+            'id_reclamo' => $id,
+            'id_usuario' => $dato->id_usuario,
+            'reclamante' => trim(
+                ($usuario->nombre ?? '') . ' ' .
+                ($usuario->apellido ?? '')
+            ),
+            'contacto' => $dato->email,
+            'categoria' => $categoria,
+            'tipo' => $datos['tipo'],
+            'zona' => $datos['zona'],
+            'referencia' => $datos['referencia'],
+            'ubicacion' => null,
+            'descripcion' => $datos['descripcion'],
+            'foto' => $foto,
+            'estado' => 'sin_asignar',
+            'prioridad' => null,
+            'id_cuadrilla' => null,
+            'id_contenedor' => null,
+            'fecha_reporte' => now(),
+            'fecha_finalizacion' => null,
+            'resultado' => null,
+            'notificado' => 0
+        ]);
+    } catch (\Throwable $error) {
+        if ($ruta ?? false) {
+            Storage::disk('public')->delete($ruta);
+        }
+
+        throw $error;
+    }
+
+    return response()->json([
+        'success' => true,
+        'message' => 'Reclamo registrado correctamente.',
+        'data' => $this->formatearReclamo(
+            $this->obtenerReclamo($id)
+        )
+    ], 201);
+    }
     public function index(Request $request)
     {
         $datos = $request->validate([
