@@ -257,7 +257,7 @@ class ContenedorController extends Controller
                 'dias_sin_recoleccion' => $dias,
                 'id_ubicacion' => $idUbicacion,
                 'circuito' => $datos['circuito'],
-                'ultimo_registro' => $datos['ultimo_registro'] ?? null,
+                'ultimo_registro' => $datos['ultimo_registro'] ?? now()->toDateString(),
                 'activo' => 1
             ]);
 
@@ -425,6 +425,7 @@ class ContenedorController extends Controller
             }
 
             if (
+                array_key_exists('ultimo_registro', $datos) &&
                 ($anterior->ultimo_registro ?? '') !==
                 ($datos['ultimo_registro'] ?? '')
             ) {
@@ -432,7 +433,7 @@ class ContenedorController extends Controller
                     'Último registro: ' .
                     ($anterior->ultimo_registro ?: 'Sin registro') .
                     ' → ' .
-                    ($datos['ultimo_registro'] ?: 'Sin registro');
+                    (($datos['ultimo_registro'] ?? null) ?: 'Sin registro');
             }
 
             DB::table('contenedores')
@@ -447,7 +448,7 @@ class ContenedorController extends Controller
                     'id_ubicacion' => $idUbicacionNueva,
                     'circuito' => $datos['circuito'],
                     'ultimo_registro' =>
-                        $datos['ultimo_registro'] ?? null
+                        $datos['ultimo_registro'] ?? $anterior->ultimo_registro
                 ]);
 
             if (count($cambios)) {
@@ -1198,11 +1199,19 @@ class ContenedorController extends Controller
     private function formatearContenedor(
         $item
     ): array {
-        $dias = max(
-            0,
-            (int) (
-                $item->dias_sin_recoleccion ?? 0
-            )
+        //tomaremos la fecha del ultimo registro del contenedor para calcular dias sin recoleccion
+        $fechaBase = $item->ultimo_registro;
+
+       if (!$fechaBase) {
+            $fechaBase = DB::table('historial_contenedores')
+                ->where('id_contenedor', $item->id_contenedor)
+                ->orderBy('id_historial', 'asc')
+                ->value('fecha');
+        }
+        //calculo 
+        $dias = $fechaBase
+            ? ($this->calcularDias($fechaBase) +1)
+            : max(1, (int) ($item->dias_sin_recoleccion ?? 1)
         );
 
         return [
@@ -1349,48 +1358,69 @@ class ContenedorController extends Controller
         return 'negro';
     }
 
-    // Detecta de forma simple el circuito y municipio según la latitud y longitud elegida en el mapa
+    // Detecta el circuito y municipio según la latitud y longitud elegida en el mapa
     private function detectarCircuitoPorCoordenadas(
         float $lat,
         float $lng
     ): array {
-        // Zona oeste (Cerro / La Teja) -> Municipio A
-        if ($lng < -56.20) {
-            return ['municipio' => 'A', 'circuito' => 'A_101'];
+        // 1. Buscamos si el punto cae dentro del polígono de alguno de los circuitos activos
+        $circuitos = DB::table('circuitos')
+            ->whereNotNull('coordenadas')
+            ->get();
+
+        foreach ($circuitos as $circuito) {
+            $poligono = json_decode($circuito->coordenadas, true);
+            if (is_array($poligono) && count($poligono) >= 3) {
+                if ($this->puntoEnPoligono($lat, $lng, $poligono)) {
+                    return [
+                        'municipio' => $circuito->municipio ?: 'CH',
+                        'circuito' => $circuito->id_circuito
+                    ];
+                }
+            }
         }
 
-        // Zona norte (Sayago / Colón) -> Municipio G
-        if ($lat > -34.84 && $lng < -56.17) {
-            return ['municipio' => 'G', 'circuito' => 'G_101'];
+        // 2. Si no cae dentro de ningún polígono, usamos el primer circuito disponible en rutas
+        $primeraRuta = DB::table('rutas')
+            ->orderBy('circuito')
+            ->first();
+
+        if ($primeraRuta) {
+            return [
+                'municipio' => $primeraRuta->municipio ?: 'CH',
+                'circuito' => $primeraRuta->circuito
+            ];
         }
 
-        // Zona noreste (Maroñas / Piedras Blancas) -> Municipio F
-        if ($lat > -34.86 && $lng >= -56.14) {
-            return ['municipio' => 'F', 'circuito' => 'F_101'];
+        return ['municipio' => 'CH', 'circuito' => 'CH_101'];
+    }
+
+    // Comprueba de forma sencilla si una coordenada (lat, lng) está dentro de un polígono
+    private function puntoEnPoligono(
+        float $lat,
+        float $lng,
+        array $poligono
+    ): bool {
+        $dentro = false;
+        $total = count($poligono);
+        $j = $total - 1;
+
+        for ($i = 0; $i < $total; $i++) {
+            $latI = is_array($poligono[$i]) ? (float) ($poligono[$i]['lat'] ?? $poligono[$i][0] ?? 0) : 0;
+            $lngI = is_array($poligono[$i]) ? (float) ($poligono[$i]['lng'] ?? $poligono[$i][1] ?? 0) : 0;
+            $latJ = is_array($poligono[$j]) ? (float) ($poligono[$j]['lat'] ?? $poligono[$j][0] ?? 0) : 0;
+            $lngJ = is_array($poligono[$j]) ? (float) ($poligono[$j]['lng'] ?? $poligono[$j][1] ?? 0) : 0;
+
+            $intersecta = (($lngI > $lng) !== ($lngJ > $lng)) &&
+                ($lat < ($latJ - $latI) * ($lng - $lngI) / (($lngJ - $lngI) ?: 0.0000001) + $latI);
+
+            if ($intersecta) {
+                $dentro = !$dentro;
+            }
+            $j = $i;
         }
 
-        // Zona central norte (Cerrito / Unión) -> Municipio D
-        if ($lat > -34.875 && $lng >= -56.175) {
-            return ['municipio' => 'D', 'circuito' => 'D_101'];
-        }
-
-        // Zona Prado / Aguada -> Municipio C
-        if ($lat > -34.89 && $lng < -56.175) {
-            return ['municipio' => 'C', 'circuito' => 'C_102'];
-        }
-
-        // Zona este costera (Malvín / Carrasco) -> Municipio E
-        if ($lng >= -56.125) {
-            return ['municipio' => 'E', 'circuito' => 'E_102'];
-        }
-
-        // Zona Pocitos / Punta Carretas / Buceo -> Municipio CH
-        if ($lng >= -56.168) {
-            return ['municipio' => 'CH', 'circuito' => 'CH_102'];
-        }
-
-        // Zona Centro / Cordón / Ciudad Vieja (por defecto) -> Municipio B
-        return ['municipio' => 'B', 'circuito' => 'B_01'];
+        return $dentro;
     }
 
     private function etiquetaDias(
