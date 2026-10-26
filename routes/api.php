@@ -8,13 +8,11 @@ use App\Http\Controllers\IncidenciaController;
 use App\Http\Controllers\CamionController;
 use App\Http\Controllers\ReclamoController;
 
-// Ruta pública de comprobación (no requiere token JWT).
 Route::get('health', fn () => response()->json([
     'success' => true,
     'message' => 'API Gestion running',
 ]));
 
-// Rutas protegidas con el middleware auth:api (requieren Authorization: Bearer <token>).
 Route::middleware('auth:api')->group(function () {
 
     Route::get(
@@ -290,6 +288,11 @@ Route::middleware('auth:api')->group(function () {
     Route::get(
         'reclamos',
         [ReclamoController::class, 'index']
+    );
+
+    Route::post(
+    'reclamos',
+    [ReclamoController::class, 'store']
     );
 
     Route::get(
