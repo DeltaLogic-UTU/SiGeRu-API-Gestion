@@ -42,7 +42,8 @@ class ReclamoController extends Controller
                 'Contenedor desbordado',
                 'Contenedor roto',
                 'Residuos fuera de lugar',
-                'Demora en la recolección'
+                'Demora en la recolección',
+                'Riesgo sanitario / contaminación biológica'
             ])
         ],
         'categoria' => [
@@ -52,6 +53,7 @@ class ReclamoController extends Controller
                 'Contenedores',
                 'Residuos',
                 'Recolección'
+                'Riesgo sanitario'
             ])
         ],
         'zona' => [
@@ -79,6 +81,7 @@ class ReclamoController extends Controller
         'Contenedor roto' => 'Contenedores',
         'Residuos fuera de lugar' => 'Residuos',
         'Demora en la recolección' => 'Recolección'
+        'Riesgo sanitario / contaminación biológica' => 'Riesgo sanitario'
     ];
 
     $categoria = $categorias[$datos['tipo']];
