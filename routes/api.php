@@ -39,6 +39,11 @@ Route::middleware('auth:api')->group(function () {
         [CircuitoController::class, 'store']
     );
 
+    Route::put(
+        'circuitos/{id}',
+        [CircuitoController::class, 'update']
+    )->where('id', '[A-Za-z0-9_-]+');
+
     Route::get(
         'circuitos/{id}',
         [CircuitoController::class, 'show']

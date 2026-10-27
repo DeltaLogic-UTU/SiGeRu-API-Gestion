@@ -4,6 +4,7 @@ namespace App\Http\Controllers;
 
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\DB;
+use Illuminate\Support\Facades\Schema;
 
 class CircuitoController extends Controller
 {
@@ -30,10 +31,10 @@ class CircuitoController extends Controller
 
                 return [
                     'id_circuito' => $item->id_circuito,
-                    'municipio' => $item->municipio,
-                    'zona' => $item->zona,
-                    'descripcion' => $item->descripcion,
-                    'estado' => $item->estado,
+                    'municipio' => $item->municipio ?? null,
+                    'zona' => $item->zona ?? null,
+                    'descripcion' => $item->descripcion ?? null,
+                    'estado' => $item->estado ?? 'activo',
                     'coordenadas' => $coordenadas,
                     'total_contenedores' => (int) ($conteos[$item->id_circuito] ?? 0)
                 ];
@@ -48,6 +49,17 @@ class CircuitoController extends Controller
     // Guarda un nuevo circuito dibujado en el mapa o actualiza uno existente
     public function store(Request $request)
     {
+        return $this->guardarCircuito($request, null);
+    }
+
+    // Actualiza un circuito existente seleccionado en el mapa
+    public function update(Request $request, string $id)
+    {
+        return $this->guardarCircuito($request, $id);
+    }
+
+    private function guardarCircuito(Request $request, ?string $idOriginal = null)
+    {
         $validated = $request->validate([
             'id_circuito' => 'required|string|max:30',
             'municipio' => 'nullable|string|max:100',
@@ -57,9 +69,24 @@ class CircuitoController extends Controller
         ]);
 
         $codigo = strtoupper(trim($validated['id_circuito']));
-        $municipio = !empty($validated['municipio']) ? strtoupper(trim($validated['municipio'])) : 'Montevideo';
-        $zona = !empty($validated['zona']) ? trim($validated['zona']) : null;
-        $descripcion = !empty($validated['descripcion']) ? trim($validated['descripcion']) : null;
+
+        // Si no se envió municipio, lo deducimos del prefijo del código (ej: CH_101 -> CH)
+        $municipio = !empty($validated['municipio']) ? strtoupper(trim($validated['municipio'])) : null;
+        if (!$municipio && str_contains($codigo, '_')) {
+            $municipio = explode('_', $codigo)[0];
+        }
+        if (!$municipio) {
+            $municipio = 'CH';
+        }
+
+        // Zona y descripción son opcionales
+        $zona = isset($validated['zona']) && trim((string) $validated['zona']) !== ''
+            ? trim((string) $validated['zona'])
+            : null;
+
+        $descripcion = isset($validated['descripcion']) && trim((string) $validated['descripcion']) !== ''
+            ? trim((string) $validated['descripcion'])
+            : null;
 
         $coordenadas = is_array($validated['coordenadas'])
             ? $validated['coordenadas']
@@ -72,32 +99,105 @@ class CircuitoController extends Controller
             ], 422);
         }
 
-        // Guardamos en la tabla circuitos
-        DB::table('circuitos')->updateOrInsert(
-            ['id_circuito' => $codigo],
-            [
-                'municipio' => $municipio,
-                'zona' => $zona,
-                'descripcion' => $descripcion,
-                'coordenadas' => json_encode($coordenadas),
-                'estado' => 'activo'
-            ]
-        );
+        DB::transaction(function () use ($codigo, $idOriginal, $municipio, $zona, $descripcion, $coordenadas) {
+            // 1. Armamos los campos seguros para la tabla circuitos
+            $datosCircuito = [
+                'coordenadas' => json_encode($coordenadas)
+            ];
+            if (Schema::hasColumn('circuitos', 'municipio')) {
+                $datosCircuito['municipio'] = $municipio;
+            }
+            if (Schema::hasColumn('circuitos', 'zona')) {
+                $datosCircuito['zona'] = $zona;
+            }
+            if (Schema::hasColumn('circuitos', 'descripcion')) {
+                $datosCircuito['descripcion'] = $descripcion;
+            }
+            if (Schema::hasColumn('circuitos', 'estado')) {
+                $datosCircuito['estado'] = 'activo';
+            }
 
-        // Mantenemos sincronizada la tabla rutas
-        DB::table('rutas')->updateOrInsert(
-            ['circuito' => $codigo],
-            [
-                'nombre' => $zona ?: "Circuito $codigo",
-                'municipio' => $municipio,
-                'zona' => $zona,
-                'descripcion' => $descripcion,
-                'estado' => 'Asignada'
-            ]
-        );
+            DB::table('circuitos')->updateOrInsert(
+                ['id_circuito' => $codigo],
+                $datosCircuito
+            );
 
-        // Si hay contenedores con coordenadas que caen dentro de este nuevo circuito,
-        // o si pertenecen a este código, calculamos el total
+            // 2. Armamos los campos seguros para sincronizar la tabla rutas
+            $datosRuta = [
+                'municipio' => $municipio
+            ];
+            if (Schema::hasColumn('rutas', 'nombre')) {
+                $datosRuta['nombre'] = $zona ?: "Circuito $codigo";
+            }
+            if (Schema::hasColumn('rutas', 'zona')) {
+                $datosRuta['zona'] = $zona;
+            }
+            if (Schema::hasColumn('rutas', 'descripcion')) {
+                $datosRuta['descripcion'] = $descripcion;
+            }
+            if (Schema::hasColumn('rutas', 'estado')) {
+                $datosRuta['estado'] = 'Asignada';
+            }
+
+            DB::table('rutas')->updateOrInsert(
+                ['circuito' => $codigo],
+                $datosRuta
+            );
+
+            // Si se estaba editando un circuito y se le cambió el código, reasignamos sus contenedores y borramos el viejo
+            if ($idOriginal && strtoupper($idOriginal) !== $codigo) {
+                DB::table('contenedores')
+                    ->where('circuito', $idOriginal)
+                    ->update(['circuito' => $codigo]);
+
+                $rutasViejas = DB::table('rutas')
+                    ->where('circuito', $idOriginal)
+                    ->pluck('id_ruta')
+                    ->toArray();
+
+                $rutaNuevaId = DB::table('rutas')
+                    ->where('circuito', $codigo)
+                    ->value('id_ruta');
+
+                if (!empty($rutasViejas) && $rutaNuevaId) {
+                    if (Schema::hasTable('camiones')) {
+                        DB::table('camiones')->whereIn('id_ruta', $rutasViejas)->update(['id_ruta' => $rutaNuevaId]);
+                    }
+                    if (Schema::hasTable('camion_asignaciones')) {
+                        DB::table('camion_asignaciones')->whereIn('id_ruta', $rutasViejas)->update(['id_ruta' => $rutaNuevaId]);
+                    }
+                    if (Schema::hasTable('cuadrilla_rutas')) {
+                        DB::table('cuadrilla_rutas')->whereIn('id_ruta', $rutasViejas)->update(['id_ruta' => $rutaNuevaId]);
+                    }
+                    if (Schema::hasTable('recolecciones')) {
+                        DB::table('recolecciones')->whereIn('id_ruta', $rutasViejas)->update(['id_ruta' => $rutaNuevaId]);
+                    }
+                    DB::table('rutas')->whereIn('id_ruta', $rutasViejas)->delete();
+                }
+
+                DB::table('circuitos')->where('id_circuito', $idOriginal)->delete();
+            }
+
+            // 3. Vinculamos automáticamente todos los contenedores que queden dentro del polígono de este circuito
+            $contenedoresConUbicacion = DB::table('contenedores')
+                ->whereNotNull('latitud')
+                ->whereNotNull('longitud')
+                ->get(['id_contenedor', 'latitud', 'longitud']);
+
+            $idsDentro = [];
+            foreach ($contenedoresConUbicacion as $cont) {
+                if ($this->puntoDentroDePoligono((float) $cont->latitud, (float) $cont->longitud, $coordenadas)) {
+                    $idsDentro[] = $cont->id_contenedor;
+                }
+            }
+
+            if (!empty($idsDentro)) {
+                DB::table('contenedores')
+                    ->whereIn('id_contenedor', $idsDentro)
+                    ->update(['circuito' => $codigo]);
+            }
+        });
+
         $totalContenedores = DB::table('contenedores')
             ->where('circuito', $codigo)
             ->where('activo', 1)
@@ -115,7 +215,7 @@ class CircuitoController extends Controller
                 'total_contenedores' => $totalContenedores,
                 'estado' => 'activo'
             ]
-        ], 201);
+        ], $idOriginal ? 200 : 201);
     }
 
     // Consulta los detalles de un circuito específico
@@ -146,14 +246,34 @@ class CircuitoController extends Controller
             'success' => true,
             'data' => [
                 'id_circuito' => $circuito->id_circuito,
-                'municipio' => $circuito->municipio,
-                'zona' => $circuito->zona,
-                'descripcion' => $circuito->descripcion,
-                'estado' => $circuito->estado,
+                'municipio' => $circuito->municipio ?? null,
+                'zona' => $circuito->zona ?? null,
+                'descripcion' => $circuito->descripcion ?? null,
+                'estado' => $circuito->estado ?? 'activo',
                 'coordenadas' => $coordenadas,
                 'total_contenedores' => $totalContenedores
             ]
         ]);
     }
-}
 
+    // Comprueba geométricamente si un contenedor (lat, lng) cae dentro del polígono del circuito
+    private function puntoDentroDePoligono(float $lat, float $lng, array $poligono): bool
+    {
+        $dentro = false;
+        $total = count($poligono);
+        for ($i = 0, $j = $total - 1; $i < $total; $j = $i++) {
+            $latI = (float) ($poligono[$i][0] ?? 0);
+            $lngI = (float) ($poligono[$i][1] ?? 0);
+            $latJ = (float) ($poligono[$j][0] ?? 0);
+            $lngJ = (float) ($poligono[$j][1] ?? 0);
+
+            $cruza = (($lngI > $lng) !== ($lngJ > $lng)) &&
+                ($lat < ($latJ - $latI) * ($lng - $lngI) / (($lngJ - $lngI) ?: 0.0000001) + $latI);
+
+            if ($cruza) {
+                $dentro = !$dentro;
+            }
+        }
+        return $dentro;
+    }
+}
