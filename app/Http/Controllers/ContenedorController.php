@@ -82,7 +82,8 @@ class ContenedorController extends Controller
                 'estados' => [
                     'funcional',
                     'roto',
-                    'desbordado'
+                    'desbordado',
+                    'incendiado'           
                 ]
             ]
         ]);
@@ -832,7 +833,8 @@ class ContenedorController extends Controller
                 Rule::in([
                     'funcional',
                     'roto',
-                    'desbordado'
+                    'desbordado',
+                    'incendiado'    
                 ])
             ],
 
