@@ -532,52 +532,58 @@ class ContenedorController extends Controller
         ]);
     }
 
-    public function reactivar(int $id)
-    {
-        $contenedor = $this->obtenerContenedor($id);
 
-        if (!$contenedor) {
-            return response()->json([
-                'success' => false,
-                'message' => 'Contenedor no encontrado.'
-            ], 404);
-        }
+public function reactivar(int $id)
+{
+    $contenedor = $this->obtenerContenedor($id);
 
-        if ((int) $contenedor->activo) {
-            return response()->json([
-                'success' => false,
-                'message' =>
-                    'El contenedor ya está activo.'
-            ], 422);
-        }
-
-        DB::transaction(function () use ($id) {
-            DB::table('contenedores')
-                ->where('id_contenedor', $id)
-                ->update([
-                    'activo' => 1
-                ]);
-
-            $this->registrarHistorial(
-                $id,
-                null,
-                null,
-                null,
-                null,
-                'Reactivación: Contenedor habilitado nuevamente.'
-            );
-        });
-
+    if (!$contenedor) {
         return response()->json([
-            'success' => true,
-            'message' =>
-                'Contenedor reactivado correctamente.',
-            'data' => $this->formatearContenedor(
-                $this->obtenerContenedor($id)
-            )
-        ]);
+            'success' => false,
+            'message' => 'Contenedor no encontrado.'
+        ], 404);
     }
 
+    if ((int) $contenedor->activo) {
+        return response()->json([
+            'success' => false,
+            'message' => 'El contenedor ya está activo.'
+        ], 422);
+    }
+
+    if ($contenedor->estado === 'incendiado') {
+        return response()->json([
+            'success' => false,
+            'message' =>
+                'No se puede reactivar un contenedor incendiado.'
+        ], 422);
+    }
+
+    DB::transaction(function () use ($id) {
+        DB::table('contenedores')
+            ->where('id_contenedor', $id)
+            ->update([
+                'activo' => 1
+            ]);
+
+        $this->registrarHistorial(
+            $id,
+            null,
+            null,
+            null,
+            null,
+            'Reactivación: Contenedor habilitado nuevamente.'
+        );
+    });
+
+    return response()->json([
+        'success' => true,
+        'message' => 'Contenedor reactivado correctamente.',
+        'data' => $this->formatearContenedor(
+            $this->obtenerContenedor($id)
+        )
+    ]);
+}
     
 public function reemplazar(Request $request, int $id)
 {
