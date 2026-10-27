@@ -142,6 +142,11 @@ Route::middleware('auth:api')->group(function () {
         [ContenedorController::class, 'reactivar']
     )->whereNumber('id');
 
+    Route::post(
+        'contenedores/{id}/reemplazar',
+        [ContenedorController::class, 'reemplazar']
+    )->whereNumber('id');
+
     Route::get(
         'contenedores/{id}/historial',
         [ContenedorController::class, 'historial']
