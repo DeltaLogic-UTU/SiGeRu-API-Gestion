@@ -823,8 +823,24 @@ class CamionController extends Controller
             )
         );
 
+        $gpsStr = $item->gps;
+        $ubicacion = 'Base: Cantón del Buceo';
+        $lat = null;
+        $lng = null;
+        if (!empty($gpsStr) && str_contains($gpsStr, ',')) {
+            $partes = explode(',', $gpsStr);
+            if (count($partes) === 2 && is_numeric(trim($partes[0])) && is_numeric(trim($partes[1]))) {
+                $lat = (float) trim($partes[0]);
+                $lng = (float) trim($partes[1]);
+                $ubicacion = $lat . ', ' . $lng;
+            }
+        }
+
         return [
             'id_camion' => (int) $item->id_camion,
+            'ubicacion' => $ubicacion,
+            'latitud' => $lat,
+            'longitud' => $lng,
             'matricula' => $item->matricula,
             'tipo' => $item->tipo,
             'estado' => $item->estado,
