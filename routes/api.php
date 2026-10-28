@@ -8,6 +8,7 @@ use App\Http\Controllers\IncidenciaController;
 use App\Http\Controllers\CamionController;
 use App\Http\Controllers\ReclamoController;
 use App\Http\Controllers\CircuitoController;
+use App\Http\Controllers\RecoleccionController;
 
 Route::get('health', fn () => response()->json([
     'success' => true,
@@ -296,7 +297,8 @@ Route::middleware('auth:api')->group(function () {
         [CamionController::class, 'asignarCuadrilla']
     )->whereNumber('id');
 
-    Route::put(
+    Route::match(
+        ['put', 'post', 'delete'],
         'camiones/{id}/ruta',
         [CamionController::class, 'asignarRuta']
     )->whereNumber('id');
@@ -388,6 +390,15 @@ Route::middleware('auth:api')->group(function () {
         'id',
         '[A-Za-z0-9_-]+'
     );
+
+    // Rutas de recolección y mapa del chofer (compatibles con API 8002)
+    Route::get('recolecciones', [RecoleccionController::class, 'index']);
+    Route::post('rutas/despachar', [RecoleccionController::class, 'despacharRuta']);
+    Route::get('chofer/ruta', [RecoleccionController::class, 'rutaDeChofer']);
+    Route::post('recolecciones/iniciar', [RecoleccionController::class, 'iniciarRecoleccion']);
+    Route::post('recolecciones/{id}/contenedor', [RecoleccionController::class, 'recolectarContenedor'])->whereNumber('id');
+    Route::post('recolecciones/{id}/finalizar', [RecoleccionController::class, 'finalizarRecoleccion'])->whereNumber('id');
+    Route::put('camiones/{id}/gps', [RecoleccionController::class, 'actualizarGpsCamion'])->whereNumber('id');
 });
 
 
