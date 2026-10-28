@@ -52,7 +52,7 @@ class ReclamoController extends Controller
             Rule::in([
                 'Contenedores',
                 'Residuos',
-                'Recolección'
+                'Recolección',
                 'Riesgo sanitario'
             ])
         ],
@@ -80,7 +80,7 @@ class ReclamoController extends Controller
         'Contenedor desbordado' => 'Contenedores',
         'Contenedor roto' => 'Contenedores',
         'Residuos fuera de lugar' => 'Residuos',
-        'Demora en la recolección' => 'Recolección'
+        'Demora en la recolección' => 'Recolección',
         'Riesgo sanitario / contaminación biológica' => 'Riesgo sanitario'
     ];
 
