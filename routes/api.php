@@ -288,6 +288,11 @@ Route::middleware('auth:api')->group(function () {
     )->whereNumber('id');
 
     Route::put(
+        'camiones/{id}/foto',
+        [CamionController::class, 'actualizarFoto']
+    )->whereNumber('id');
+
+    Route::put(
         'camiones/{id}/chofer',
         [CamionController::class, 'asignarChofer']
     )->whereNumber('id');

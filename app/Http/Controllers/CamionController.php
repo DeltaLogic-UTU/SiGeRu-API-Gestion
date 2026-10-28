@@ -43,6 +43,35 @@ class CamionController extends Controller
         ]);
     }
 
+    
+    public function actualizarFoto(
+        Request $request,
+        int $id
+    ) {
+        $camion = DB::table('camiones')
+            ->where('id_camion', $id)
+            ->where('activo', true)
+            ->first();
+
+        if (!$camion) {
+            return response()->json([
+                'success' => false,
+                'message' => 'Camión no encontrado.'
+            ], 404);
+        }
+
+        $foto = $request->input('foto');
+
+        DB::table('camiones')
+            ->where('id_camion', $id)
+            ->update(['foto' => $foto]);
+
+        return response()->json([
+            'success' => true,
+            'message' => 'Foto del camión actualizada correctamente.'
+        ]);
+    }
+
     public function catalogos()
     {
         $tipos = DB::table('tipo_residuo')
@@ -145,6 +174,7 @@ class CamionController extends Controller
                 'km_en_turno' => 0,
                 'tiempo_activo' => '00:00:00',
                 'gps' => $datos['gps'] ?? null,
+                'foto' => $datos['foto'] ?? null,
                 'capacidad_kg' => $datos['capacidad_kg'] ?? null,
                 'peso_recolectado_kg' => 0,
                 'contenedores_asignados' => 0,
@@ -539,6 +569,7 @@ class CamionController extends Controller
                 'min:0'
             ],
 
+            'foto' => ['nullable', 'string'],
             'ult_carga_combustible' => [
                 'nullable',
                 'date'
@@ -783,6 +814,7 @@ class CamionController extends Controller
                 'c.km_en_turno',
                 'c.tiempo_activo',
                 'c.gps',
+                'c.foto',
                 'c.capacidad_kg',
                 'c.peso_recolectado_kg',
                 'c.contenedores_asignados',
@@ -838,6 +870,7 @@ class CamionController extends Controller
 
         return [
             'id_camion' => (int) $item->id_camion,
+            'foto' => $item->foto ?? null,
             'ubicacion' => $ubicacion,
             'latitud' => $lat,
             'longitud' => $lng,
