@@ -82,7 +82,8 @@ class ContenedorController extends Controller
                 'estados' => [
                     'funcional',
                     'roto',
-                    'desbordado'
+                    'desbordado',
+                    'incendiado'           
                 ]
             ]
         ]);
@@ -532,51 +533,180 @@ class ContenedorController extends Controller
         ]);
     }
 
-    public function reactivar(int $id)
-    {
-        $contenedor = $this->obtenerContenedor($id);
 
-        if (!$contenedor) {
-            return response()->json([
-                'success' => false,
-                'message' => 'Contenedor no encontrado.'
-            ], 404);
-        }
+public function reactivar(int $id)
+{
+    $contenedor = $this->obtenerContenedor($id);
 
-        if ((int) $contenedor->activo) {
-            return response()->json([
-                'success' => false,
-                'message' =>
-                    'El contenedor ya está activo.'
-            ], 422);
-        }
-
-        DB::transaction(function () use ($id) {
-            DB::table('contenedores')
-                ->where('id_contenedor', $id)
-                ->update([
-                    'activo' => 1
-                ]);
-
-            $this->registrarHistorial(
-                $id,
-                null,
-                null,
-                null,
-                null,
-                'Reactivación: Contenedor habilitado nuevamente.'
-            );
-        });
-
+    if (!$contenedor) {
         return response()->json([
-            'success' => true,
-            'message' =>
-                'Contenedor reactivado correctamente.',
-            'data' => $this->formatearContenedor(
-                $this->obtenerContenedor($id)
-            )
-        ]);
+            'success' => false,
+            'message' => 'Contenedor no encontrado.'
+        ], 404);
     }
+
+    if ((int) $contenedor->activo) {
+        return response()->json([
+            'success' => false,
+            'message' => 'El contenedor ya está activo.'
+        ], 422);
+    }
+
+    if ($contenedor->estado === 'incendiado') {
+        return response()->json([
+            'success' => false,
+            'message' =>
+                'No se puede reactivar un contenedor incendiado.'
+        ], 422);
+    }
+
+    DB::transaction(function () use ($id) {
+        DB::table('contenedores')
+            ->where('id_contenedor', $id)
+            ->update([
+                'activo' => 1
+            ]);
+
+        $this->registrarHistorial(
+            $id,
+            null,
+            null,
+            null,
+            null,
+            'Reactivación: Contenedor habilitado nuevamente.'
+        );
+    });
+
+    return response()->json([
+        'success' => true,
+        'message' => 'Contenedor reactivado correctamente.',
+        'data' => $this->formatearContenedor(
+            $this->obtenerContenedor($id)
+        )
+    ]);
+}
+    
+public function reemplazar(Request $request, int $id)
+{
+    $this->normalizarRequest($request);
+
+    $datos = $request->validate([
+        'codigo' => [
+            'required',
+            'string',
+            'max:50',
+            Rule::unique('contenedores', 'codigo')
+        ],
+        'modelo' => [
+            'nullable',
+            'string',
+            'max:100'
+        ],
+        'tipo' => [
+            'required',
+            'string',
+            'max:30',
+            Rule::exists('tipo_residuo', 'tipo')
+        ],
+        'capacidad' => [
+            'required',
+            'numeric',
+            'min:0'
+        ]
+    ]);
+
+    $resultado = DB::transaction(function () use ($id, $datos) {
+
+        $anterior = DB::table('contenedores')
+            ->where('id_contenedor', $id)
+            ->lockForUpdate()
+            ->first();
+
+        if (!$anterior) {
+            return [
+                'error' => 'Contenedor no encontrado.',
+                'status' => 404
+            ];
+        }
+
+        if (!(int) $anterior->activo) {
+            return [
+                'error' => 'El contenedor ya está dado de baja.',
+                'status' => 422
+            ];
+        }
+
+        if ($anterior->estado !== 'incendiado') {
+            return [
+                'error' => 'Solo se pueden reemplazar contenedores incendiados.',
+                'status' => 422
+            ];
+        }
+
+        $nuevoId = DB::table('contenedores')->insertGetId([
+            'codigo' => $datos['codigo'],
+            'modelo' => $datos['modelo'] ?? null,
+            'tipo' => $datos['tipo'],
+            'capacidad' => $datos['capacidad'],
+            'estado' => 'funcional',
+            'dias_sin_recoleccion' => 0,
+            'id_ubicacion' => $anterior->id_ubicacion,
+            'circuito' => $anterior->circuito,
+            'ultimo_registro' => null,
+            'activo' => 1
+        ]);
+
+        DB::table('contenedores')
+            ->where('id_contenedor', $id)
+            ->update([
+                'activo' => 0
+            ]);
+
+        $this->registrarHistorial(
+            $id,
+            'incendiado',
+            null,
+            null,
+            null,
+            'Reemplazo: Contenedor incendiado dado de baja. ' .
+            'Sustituido por ' . $datos['codigo'] .
+            ' (ID ' . $nuevoId . ').'
+        );
+
+        $this->registrarHistorial(
+            $nuevoId,
+            null,
+            'funcional',
+            null,
+            $anterior->id_ubicacion !== null
+                ? (int) $anterior->id_ubicacion
+                : null,
+            'Reemplazo: Nuevo contenedor instalado en lugar de ' .
+            $anterior->codigo .
+            ' (ID ' . $id . ').'
+        );
+
+        return [
+            'nuevo_id' => $nuevoId
+        ];
+    });
+
+    if (isset($resultado['error'])) {
+        return response()->json([
+            'success' => false,
+            'message' => $resultado['error']
+        ], $resultado['status']);
+    }
+
+    return response()->json([
+        'success' => true,
+        'message' => 'Contenedor reemplazado correctamente.',
+        'data' => $this->formatearContenedor(
+            $this->obtenerContenedor($resultado['nuevo_id'])
+        )
+    ], 201);
+}
+
 
     public function historial(int $id)
     {
@@ -833,7 +963,8 @@ class ContenedorController extends Controller
                 Rule::in([
                     'funcional',
                     'roto',
-                    'desbordado'
+                    'desbordado',
+                    'incendiado'    
                 ])
             ],
 
@@ -1471,6 +1602,10 @@ class ContenedorController extends Controller
 
         if (str_starts_with($motivo, 'Reactivación:')) {
             return 'Reactivación';
+        }
+        
+        if (str_starts_with($motivo, 'Reemplazo:')) {
+            return 'Reemplazo';
         }
 
         if (str_starts_with($motivo, 'Limpieza:')) {

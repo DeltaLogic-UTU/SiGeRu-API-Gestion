@@ -9,7 +9,6 @@ use App\Http\Controllers\CamionController;
 use App\Http\Controllers\ReclamoController;
 use App\Http\Controllers\CircuitoController;
 
-// Ruta pública de comprobación (no requiere token JWT).
 Route::get('health', fn () => response()->json([
     'success' => true,
     'message' => 'API Gestion running',
@@ -176,6 +175,11 @@ Route::middleware('auth:api')->group(function () {
         [ContenedorController::class, 'reactivar']
     )->whereNumber('id');
 
+    Route::post(
+        'contenedores/{id}/reemplazar',
+        [ContenedorController::class, 'reemplazar']
+    )->whereNumber('id');
+
     Route::get(
         'contenedores/{id}/historial',
         [ContenedorController::class, 'historial']
@@ -322,6 +326,11 @@ Route::middleware('auth:api')->group(function () {
     Route::get(
         'reclamos',
         [ReclamoController::class, 'index']
+    );
+
+    Route::post(
+    'reclamos',
+    [ReclamoController::class, 'store']
     );
 
     Route::get(
