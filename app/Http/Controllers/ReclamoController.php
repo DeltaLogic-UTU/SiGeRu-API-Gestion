@@ -70,9 +70,11 @@ class ReclamoController extends Controller
             'required',
             'string'
         ],
+        'id_contenedor' => [
+            'nullable'
+        ],
         'foto' => [
-            'nullable',
-            'image'
+            'nullable'
         ]
     ]);
 
@@ -102,6 +104,16 @@ class ReclamoController extends Controller
             ->store('reclamos', 'public');
 
         $foto = Storage::disk('public')->url($ruta);
+    } elseif ($request->filled('foto')) {
+        $foto = $request->input('foto');
+    }
+
+    $idContenedor = $datos['id_contenedor'] ?? null;
+    if ($idContenedor) {
+        $existeContenedor = DB::table('contenedores')->where('id_contenedor', $idContenedor)->exists();
+        if (!$existeContenedor) {
+            $idContenedor = null;
+        }
     }
 
     try {
@@ -117,13 +129,13 @@ class ReclamoController extends Controller
             'tipo' => $datos['tipo'],
             'zona' => $datos['zona'],
             'referencia' => $datos['referencia'],
-            'ubicacion' => null,
+            'ubicacion' => trim($datos['zona'] . ' - ' . $datos['referencia']),
             'descripcion' => $datos['descripcion'],
             'foto' => $foto,
             'estado' => 'sin_asignar',
             'prioridad' => null,
             'id_cuadrilla' => null,
-            'id_contenedor' => null,
+            'id_contenedor' => $idContenedor,
             'fecha_reporte' => now(),
             'fecha_finalizacion' => null,
             'resultado' => null,
@@ -178,6 +190,14 @@ class ReclamoController extends Controller
         ]);
 
         $query = $this->consultaReclamos();
+
+        $datoAutenticado = auth('api')->user();
+        if ($datoAutenticado) {
+            $rolAuth = strtolower(trim((string) ($datoAutenticado->usuario?->rol?->nombre ?? '')));
+            if ($rolAuth === 'vecino') {
+                $query->where('r.id_usuario', $datoAutenticado->id_usuario);
+            }
+        }
 
         if (!empty($datos['estado'])) {
             $query->where(
