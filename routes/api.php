@@ -404,6 +404,7 @@ Route::middleware('auth:api')->group(function () {
     Route::post('recolecciones/{id}/contenedor', [RecoleccionController::class, 'recolectarContenedor'])->whereNumber('id');
     Route::post('recolecciones/{id}/finalizar', [RecoleccionController::class, 'finalizarRecoleccion'])->whereNumber('id');
     Route::put('camiones/{id}/gps', [RecoleccionController::class, 'actualizarGpsCamion'])->whereNumber('id');
-});
+        Route::get('chofer/historial-rutas', [RecoleccionController::class, 'historialRutasChofer']);
+    });
 
 

@@ -41,6 +41,34 @@ class RecoleccionController extends Controller
         );
     }
 
+
+    //Lee y guarda el Historial de la ruta a JSON
+    private function archivoHistorial(): string
+{
+    $rutaCompartida = dirname(base_path()) . DIRECTORY_SEPARATOR . 'SiGeRu-API-Recoleccion' . DIRECTORY_SEPARATOR . 'storage' . DIRECTORY_SEPARATOR . 'app' . DIRECTORY_SEPARATOR . 'rutas_historial.json';
+    if (is_dir(dirname($rutaCompartida))) {
+        return $rutaCompartida;
+    }
+    return storage_path('app/rutas_historial.json');
+}
+
+private function leerHistorial(): array
+{
+    $archivo = $this->archivoHistorial();
+    if (!file_exists($archivo)) return [];
+    return json_decode(file_get_contents($archivo) ?: '[]', true) ?: [];
+}
+
+private function guardarHistorial(array $historial): void
+{
+    $archivo = $this->archivoHistorial();
+    if (!is_dir(dirname($archivo))) {
+        mkdir(dirname($archivo), 0775, true);
+    }
+    file_put_contents($archivo, json_encode($historial, JSON_PRETTY_PRINT | JSON_UNESCAPED_UNICODE));
+}
+
+
     // Lista todas las recolecciones registradas
     public function index()
     {
@@ -533,11 +561,37 @@ class RecoleccionController extends Controller
                     'peso_recolectado_kg' => 0
                 ]);
         });
+        // Guardar el registro en el historial JSON
+        $datosHistorial = $request->all();
+        if (!empty($datosHistorial)) {
+            $datosHistorial['id_recoleccion'] = $idRecoleccion;
+            $datosHistorial['id_camion'] = $recoleccion->id_camion;
+            $historial = $this->leerHistorial();
+            $historial[] = $datosHistorial;
+            $this->guardarHistorial($historial);
+        }
+
+        // Liberar el despacho activo del camión para que la ruta desaparezca
+        $despachos = $this->leerDespachos();
+        $keyCamion = (string) $recoleccion->id_camion;
+        if (isset($despachos[$keyCamion])) {
+            unset($despachos[$keyCamion]);
+            $this->guardarDespachos($despachos);
+        }
+        
 
         return response()->json([
             'success' => true,
             'message' => 'Recolección finalizada.'
         ]);
+    }
+    
+    // GET /api/chofer/historial-rutas?id_camion=X
+public function historialRutasChofer(Request $request)
+    {
+        $historial = $this->leerHistorial();
+        // Opcional: filtrar por id_camion o devolver los últimos recorridos
+        return response()->json(['success' => true, 'data' => array_reverse($historial)]);
     }
 }
 
