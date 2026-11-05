@@ -3,8 +3,8 @@
 namespace App\Models;
 
 use Illuminate\Database\Eloquent\Model;
+use Illuminate\Database\Eloquent\Relations\HasMany;
 
-// Modelo de la tabla 'rol' para conocer el perfil del usuario autenticado con JWT.
 class Rol extends Model
 {
     protected $table = 'rol';
@@ -16,5 +16,13 @@ class Rol extends Model
     protected $fillable = [
         'nombre'
     ];
-}
 
+    public function usuarios(): HasMany
+    {
+        return $this->hasMany(
+            Usuario::class,
+            'id_rol',
+            'id_rol'
+        );
+    }
+}

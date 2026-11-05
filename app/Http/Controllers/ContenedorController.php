@@ -143,21 +143,21 @@ class ContenedorController extends Controller
             ->selectRaw(
                 'SUM(CASE
                     WHEN c.id_contenedor IS NOT NULL
-                    AND COALESCE(c.dias_sin_recoleccion, 0) <= 2
+                    AND COALESCE(DATEDIFF(CURDATE(), c.ultimo_registro), c.dias_sin_recoleccion, 0) <= 2
                     THEN 1 ELSE 0
                 END) AS verde'
             )
             ->selectRaw(
                 'SUM(CASE
                     WHEN c.id_contenedor IS NOT NULL
-                    AND COALESCE(c.dias_sin_recoleccion, 0) BETWEEN 3 AND 5
+                    AND COALESCE(DATEDIFF(CURDATE(), c.ultimo_registro), c.dias_sin_recoleccion, 0) BETWEEN 3 AND 5
                     THEN 1 ELSE 0
                 END) AS amarillo'
             )
             ->selectRaw(
                 'SUM(CASE
                     WHEN c.id_contenedor IS NOT NULL
-                    AND COALESCE(c.dias_sin_recoleccion, 0) >= 6
+                    AND COALESCE(DATEDIFF(CURDATE(), c.ultimo_registro), c.dias_sin_recoleccion, 0) >= 6
                     THEN 1 ELSE 0
                 END) AS rojo'
             );
@@ -237,16 +237,10 @@ class ContenedorController extends Controller
 
         $datos = $this->validar($request);
 
-        $dias = array_key_exists(
-            'dias_sin_recoleccion',
-            $datos
-        )
-            ? (int) $datos['dias_sin_recoleccion']
-            : $this->calcularDias(
-                $datos['ultimo_registro'] ?? null
-            );
+        $ultimoRegistro = $datos['ultimo_registro'] ?? now()->toDateString();
+        $dias = $this->calcularDias($ultimoRegistro);
 
-        $id = DB::transaction(function () use ($datos, $dias) {
+        $id = DB::transaction(function () use ($datos, $dias, $ultimoRegistro) {
             $idUbicacion = $this->obtenerOCrearUbicacion($datos);
 
             $id = DB::table('contenedores')->insertGetId([
@@ -258,7 +252,7 @@ class ContenedorController extends Controller
                 'dias_sin_recoleccion' => $dias,
                 'id_ubicacion' => $idUbicacion,
                 'circuito' => $datos['circuito'],
-                'ultimo_registro' => $datos['ultimo_registro'] ?? now()->toDateString(),
+                'ultimo_registro' => $ultimoRegistro,
                 'activo' => 1
             ]);
 
@@ -313,24 +307,14 @@ class ContenedorController extends Controller
             $id
         );
 
-        $dias = array_key_exists(
-            'dias_sin_recoleccion',
-            $datos
-        )
-            ? (int) $datos['dias_sin_recoleccion']
-            : (
-                ($datos['ultimo_registro'] ?? null) !==
-                $anterior->ultimo_registro
-                    ? $this->calcularDias(
-                        $datos['ultimo_registro'] ?? null
-                    )
-                    : (int) $anterior->dias_sin_recoleccion
-            );
+        $ultimoRegistro = $datos['ultimo_registro'] ?? $anterior->ultimo_registro ?? now()->toDateString();
+        $dias = $this->calcularDias($ultimoRegistro);
 
         DB::transaction(function () use (
             $id,
             $datos,
             $dias,
+            $ultimoRegistro,
             $anterior
         ) {
             $idUbicacionNueva =
@@ -448,8 +432,7 @@ class ContenedorController extends Controller
                     'dias_sin_recoleccion' => $dias,
                     'id_ubicacion' => $idUbicacionNueva,
                     'circuito' => $datos['circuito'],
-                    'ultimo_registro' =>
-                        $datos['ultimo_registro'] ?? $anterior->ultimo_registro
+                    'ultimo_registro' => $ultimoRegistro
                 ]);
 
             if (count($cambios)) {
@@ -490,6 +473,143 @@ class ContenedorController extends Controller
         ]);
     }
 
+    public function actualizarUbicacion(
+    Request $request,
+    int $id
+    ) {
+    $contenedor = $this->obtenerContenedor($id);
+
+    if (!$contenedor) {
+        return response()->json([
+            'success' => false,
+            'message' => 'Contenedor no encontrado.'
+        ], 404);
+    }
+
+    if (!(int) $contenedor->activo) {
+        return response()->json([
+            'success' => false,
+            'message' => 'No se puede mover un contenedor dado de baja.'
+        ], 422);
+    }
+
+    $datos = $request->validate([
+        'latitud' => [
+            'required',
+            'numeric',
+            'between:-90,90'
+        ],
+
+        'longitud' => [
+            'required',
+            'numeric',
+            'between:-180,180'
+        ]
+    ]);
+
+    $zona = $this->detectarCircuitoPorCoordenadas(
+        (float) $datos['latitud'],
+        (float) $datos['longitud']
+    );
+
+    if (
+        empty($zona['circuito']) ||
+        empty($zona['municipio'])
+    ) {
+        return response()->json([
+            'success' => false,
+            'message' =>
+                'La nueva ubicación no pertenece a ningún circuito registrado.'
+        ], 422);
+    }
+
+    DB::transaction(function () use (
+        $id,
+        $contenedor,
+        $datos,
+        $zona
+    ) {
+        $idUbicacionNueva =
+            DB::table('ubicacion')
+                ->insertGetId([
+                    'calle' =>
+                        $contenedor->calle,
+
+                    'esquina_1' =>
+                        $contenedor->esquina,
+
+                    'esquina_2' =>
+                        $contenedor->esquina_2,
+
+                    'municipio' =>
+                        $zona['municipio'],
+
+                    'barrio' =>
+                        $contenedor->barrio,
+
+                    'descripcion' =>
+                        $contenedor->descripcion,
+
+                    'latitud' =>
+                        $datos['latitud'],
+
+                    'longitud' =>
+                        $datos['longitud']
+                ]);
+
+        DB::table('contenedores')
+            ->where(
+                'id_contenedor',
+                $id
+            )
+            ->update([
+                'id_ubicacion' =>
+                    $idUbicacionNueva,
+
+                'circuito' =>
+                    $zona['circuito']
+            ]);
+
+        $motivo =
+            'Ubicación actualizada manualmente desde el mapa de Gestión.';
+
+        if (
+            ($contenedor->circuito ?? null) !==
+            $zona['circuito']
+        ) {
+            $motivo .=
+                ' Circuito: ' .
+                ($contenedor->circuito ?: 'Sin circuito') .
+                ' → ' .
+                $zona['circuito'] .
+                '.';
+        }
+
+        $this->registrarHistorial(
+            $id,
+            $contenedor->estado,
+            $contenedor->estado,
+
+            $contenedor->id_ubicacion
+                ? (int) $contenedor->id_ubicacion
+                : null,
+
+            $idUbicacionNueva,
+            $motivo
+        );
+    });
+
+    return response()->json([
+        'success' => true,
+        'message' =>
+            'Ubicación actualizada correctamente.',
+
+        'data' =>
+            $this->formatearContenedor(
+                $this->obtenerContenedor($id)
+            )
+    ]);
+    }
     public function destroy(int $id)
     {
         $contenedor = $this->obtenerContenedor($id);
@@ -534,8 +654,8 @@ class ContenedorController extends Controller
     }
 
 
-public function reactivar(int $id)
-{
+    public function reactivar(int $id)
+    {
     $contenedor = $this->obtenerContenedor($id);
 
     if (!$contenedor) {
@@ -584,10 +704,10 @@ public function reactivar(int $id)
             $this->obtenerContenedor($id)
         )
     ]);
-}
+    }
     
-public function reemplazar(Request $request, int $id)
-{
+    public function reemplazar(Request $request, int $id)
+    {
     $this->normalizarRequest($request);
 
     $datos = $request->validate([
@@ -636,10 +756,10 @@ public function reemplazar(Request $request, int $id)
             ];
         }
 
-        if ($anterior->estado !== 'incendiado') {
+       if (!in_array($anterior->estado, ['roto', 'incendiado'], true)) {
             return [
-                'error' => 'Solo se pueden reemplazar contenedores incendiados.',
-                'status' => 422
+                'error' => 'Solo se pueden reemplazar contenedores rotos o incendiados.',
+                'status' => 422,
             ];
         }
 
@@ -662,28 +782,18 @@ public function reemplazar(Request $request, int $id)
                 'activo' => 0
             ]);
 
-        $this->registrarHistorial(
-            $id,
-            'incendiado',
-            null,
-            null,
-            null,
-            'Reemplazo: Contenedor incendiado dado de baja. ' .
-            'Sustituido por ' . $datos['codigo'] .
-            ' (ID ' . $nuevoId . ').'
-        );
 
         $this->registrarHistorial(
-            $nuevoId,
+            $id,
+            $anterior->estado,
             null,
-            'funcional',
             null,
-            $anterior->id_ubicacion !== null
-                ? (int) $anterior->id_ubicacion
-                : null,
-            'Reemplazo: Nuevo contenedor instalado en lugar de ' .
-            $anterior->codigo .
-            ' (ID ' . $id . ').'
+            null,
+            'Reemplazo: Contenedor ' .
+            $anterior->estado .
+            ' dado de baja. Sustituido por ' .
+            $datos['codigo'] .
+            ' (ID ' . $nuevoId . ').'
         );
 
         return [
@@ -705,7 +815,7 @@ public function reemplazar(Request $request, int $id)
             $this->obtenerContenedor($resultado['nuevo_id'])
         )
     ], 201);
-}
+    }
 
 
     public function historial(int $id)
@@ -1050,107 +1160,119 @@ public function reemplazar(Request $request, int $id)
     }
 
     private function normalizarRequest(
-        Request $request
+    Request $request
     ): void {
-        $datos = [];
+    $datos = [];
 
-        if ($request->has('codigo')) {
-            $datos['codigo'] = strtoupper(
-                trim(
-                    (string) $request->codigo
-                )
-            );
+    if ($request->has('codigo')) {
+        $datos['codigo'] = strtoupper(
+            trim(
+                (string) $request->codigo
+            )
+        );
+    }
+
+    if ($request->has('tipo')) {
+        $datos['tipo'] = strtolower(
+            trim(
+                (string) $request->tipo
+            )
+        );
+    }
+
+    if ($request->has('estado')) {
+        $estado = strtolower(
+            trim(
+                (string) $request->estado
+            )
+        );
+
+        if ($estado === 'funcionando') {
+            $estado = 'funcional';
         }
 
-        if ($request->has('tipo')) {
-            $datos['tipo'] = strtolower(
-                trim(
-                    (string) $request->tipo
-                )
+        $datos['estado'] = $estado;
+    }
+
+    if ($request->has('circuito')) {
+        $datos['circuito'] = strtoupper(
+            trim(
+                (string) $request->circuito
+            )
+        );
+    }
+
+    if ($request->has('municipio')) {
+        $datos['municipio'] = strtoupper(
+            trim(
+                (string) $request->municipio
+            )
+        );
+    }
+
+    foreach (
+        [
+            'modelo',
+            'calle',
+            'esquina',
+            'esquina_2',
+            'barrio',
+            'descripcion'
+        ] as $campo
+    ) {
+        if ($request->has($campo)) {
+            $valor = trim(
+                (string) $request->{$campo}
             );
+
+            $datos[$campo] =
+                $valor !== ''
+                    ? $valor
+                    : null;
         }
+    }
 
-        if ($request->has('estado')) {
-            $estado = strtolower(
-                trim(
-                    (string) $request->estado
-                )
-            );
 
-            // Si desde el mapa se envía "funcionando", lo guardamos como "funcional"
-            if ($estado === 'funcionando') {
-                $estado = 'funcional';
-            }
-
-            $datos['estado'] = $estado;
-        }
-
-        // Si se crea desde el mapa con latitud y longitud, completamos circuito, municipio, calle y primer día automáticamente
-        if (
-            $request->filled('latitud') &&
-            $request->filled('longitud')
-        ) {
-            $autoZona = $this->detectarCircuitoPorCoordenadas(
+    if (
+        $request->filled('latitud') &&
+        $request->filled('longitud')
+    ) {
+        $autoZona =
+            $this->detectarCircuitoPorCoordenadas(
                 (float) $request->latitud,
                 (float) $request->longitud
             );
 
-            if (!$request->filled('circuito')) {
-                $datos['circuito'] = $autoZona['circuito'];
-            }
-
-            if (!$request->filled('municipio')) {
-                $datos['municipio'] = $autoZona['municipio'];
-            }
-
-            if (!$request->filled('calle')) {
-                $datos['calle'] = 'Punto en mapa (' . ($datos['circuito'] ?? $autoZona['circuito']) . ')';
-            }
-
-            if (!$request->filled('dias_sin_recoleccion')) {
-                $datos['dias_sin_recoleccion'] = 1;
-            }
+        if (!empty($autoZona['circuito'])) {
+            $datos['circuito'] =
+                $autoZona['circuito'];
         }
 
-        if ($request->has('circuito')) {
-            $datos['circuito'] = strtoupper(
-                trim(
-                    (string) $request->circuito
-                )
-            );
+        if (!empty($autoZona['municipio'])) {
+            $datos['municipio'] =
+                $autoZona['municipio'];
         }
 
-        if ($request->has('municipio')) {
-            $datos['municipio'] = strtoupper(
-                trim(
-                    (string) $request->municipio
-                )
-            );
-        }
-
-        foreach (
-            [
-                'modelo',
-                'calle',
-                'esquina',
-                'esquina_2',
-                'barrio',
-                'descripcion'
-            ] as $campo
+        if (
+            !$request->filled('calle') &&
+            !empty($autoZona['circuito'])
         ) {
-            if ($request->has($campo)) {
-                $valor = trim(
-                    (string) $request->{$campo}
-                );
-
-                $datos[$campo] =
-                    $valor !== ''
-                        ? $valor
-                        : null;
-            }
+            $datos['calle'] =
+                'Punto en mapa (' .
+                $autoZona['circuito'] .
+                ')';
         }
 
-        $request->merge($datos);
+        if (
+            !$request->filled(
+                'dias_sin_recoleccion'
+            )
+        ) {
+            $datos['dias_sin_recoleccion'] = 0;
+        }
+    }
+
+    $request->merge($datos);
     }
 
     private function obtenerOCrearUbicacion(
@@ -1182,7 +1304,6 @@ public function reemplazar(Request $request, int $id)
             )
             : null;
 
-        // Si se está creando un punto directamente en el mapa con coordenadas, creamos su ubicación propia
         if (
             !empty($datos['latitud']) &&
             !empty($datos['longitud'])
@@ -1286,34 +1407,52 @@ public function reemplazar(Request $request, int $id)
 
     private function consultaContenedores()
     {
-        return DB::table('contenedores as c')
-            ->leftJoin(
-                'ubicacion as u',
-                'c.id_ubicacion',
-                '=',
-                'u.id_ubicacion'
+    return DB::table('contenedores as c')
+        ->leftJoin(
+            'ubicacion as u',
+            'c.id_ubicacion',
+            '=',
+            'u.id_ubicacion'
+        )
+        ->select(
+            'c.id_contenedor',
+            'c.codigo',
+            'c.modelo',
+            'c.tipo',
+            'c.capacidad',
+            'c.estado',
+            'c.dias_sin_recoleccion',
+            'c.id_ubicacion',
+            'c.circuito',
+            'c.ultimo_registro',
+            'c.activo',
+            'u.calle',
+            'u.esquina_1 as esquina',
+            'u.esquina_2',
+            'u.municipio',
+            'u.barrio',
+            'u.descripcion',
+            'u.latitud',
+            'u.longitud'
+        )
+
+        ->selectRaw("
+        (
+        EXISTS (
+            SELECT 1
+            FROM incidencias AS i
+            WHERE i.id_contenedor = c.id_contenedor
+              AND i.tipo_recurso = 'contenedor'
+              AND i.estado IN ('Abierta', 'En curso')
+        )
+        OR EXISTS (
+            SELECT 1
+            FROM reclamos AS r
+            WHERE r.id_contenedor = c.id_contenedor
+              AND r.estado IN ('sin_asignar', 'asignado')
             )
-            ->select(
-                'c.id_contenedor',
-                'c.codigo',
-                'c.modelo',
-                'c.tipo',
-                'c.capacidad',
-                'c.estado',
-                'c.dias_sin_recoleccion',
-                'c.id_ubicacion',
-                'c.circuito',
-                'c.ultimo_registro',
-                'c.activo',
-                'u.calle',
-                'u.esquina_1 as esquina',
-                'u.esquina_2',
-                'u.municipio',
-                'u.barrio',
-                'u.descripcion',
-                'u.latitud',
-                'u.longitud'
-            );
+        ) AS incidencia_violeta
+        ");
     }
 
     private function obtenerContenedor(
@@ -1327,101 +1466,103 @@ public function reemplazar(Request $request, int $id)
             ->first();
     }
 
-    private function formatearContenedor(
-        $item
-    ): array {
-        //tomaremos la fecha del ultimo registro del contenedor para calcular dias sin recoleccion
-        $fechaBase = $item->ultimo_registro;
+    private function formatearContenedor($item): array
+    {
+    $fechaBase = $item->ultimo_registro;
 
-       if (!$fechaBase) {
-            $fechaBase = DB::table('historial_contenedores')
-                ->where('id_contenedor', $item->id_contenedor)
-                ->orderBy('id_historial', 'asc')
-                ->value('fecha');
-        }
-        //calculo 
-        $dias = $fechaBase
-            ? ($this->calcularDias($fechaBase) +1)
-            : max(1, (int) ($item->dias_sin_recoleccion ?? 1)
-        );
+    if (!$fechaBase) {
+        $fechaBase = DB::table('historial_contenedores')
+            ->where('id_contenedor', $item->id_contenedor)
+            ->orderByDesc('fecha')
+            ->value('fecha');
+    }
 
-        return [
-            'id_contenedor' =>
-                (int) $item->id_contenedor,
+    $dias = $fechaBase
+        ? $this->calcularDias($fechaBase)
+        : max(0, (int) ($item->dias_sin_recoleccion ?? 0));
 
-            'codigo' =>
-                $item->codigo,
+    $tieneIncidencia = (bool) (
+        $item->incidencia_violeta ?? false
+    );
 
-            'modelo' =>
-                $item->modelo,
+    return [
+        'id_contenedor' =>
+            (int) $item->id_contenedor,
 
-            'tipo' =>
-                $item->tipo,
+        'codigo' =>
+            $item->codigo,
 
-            'capacidad' =>
-                $item->capacidad !== null
-                    ? (float) $item->capacidad
-                    : null,
+        'modelo' =>
+            $item->modelo,
 
-            'estado' =>
-                $item->estado,
+        'tipo' =>
+            $item->tipo,
 
-            'dias_sin_recoleccion' =>
-                $dias,
+        'capacidad' =>
+            $item->capacidad !== null
+                ? (float) $item->capacidad
+                : null,
 
-            'nivel_recoleccion' =>
-                $this->nivelDesdeDias(
-                    $dias
-                ),
+        'estado' =>
+            $item->estado,
 
-            'etiqueta_recoleccion' =>
-                $this->etiquetaDias(
-                    $dias
-                ),
+        'dias_sin_recoleccion' =>
+            $dias,
 
-            'id_ubicacion' =>
-                $item->id_ubicacion !== null
-                    ? (int) $item->id_ubicacion
-                    : null,
+        'incidencia_violeta' =>
+            $tieneIncidencia,
 
-            'circuito' =>
-                $item->circuito,
+        'nivel_recoleccion' =>
+            $tieneIncidencia
+                ? 'violeta'
+                : $this->nivelDesdeDias($dias),
 
-            'ultimo_registro' =>
-                $this->formatearFecha(
-                    $item->ultimo_registro
-                ),
+        'etiqueta_recoleccion' =>
+            $tieneIncidencia
+                ? 'Incidencia pendiente'
+                : $this->etiquetaDias($dias),
 
-            'activo' =>
-                (bool) $item->activo,
+        'id_ubicacion' =>
+            $item->id_ubicacion !== null
+                ? (int) $item->id_ubicacion
+                : null,
 
-            'calle' =>
-                $item->calle,
+        'circuito' =>
+            $item->circuito,
 
-            'esquina' =>
-                $item->esquina,
+        'ultimo_registro' =>
+            $this->formatearFecha($item->ultimo_registro),
 
-            'esquina_2' =>
-                $item->esquina_2,
+        'activo' =>
+            (bool) $item->activo,
 
-            'municipio' =>
-                $item->municipio,
+        'calle' =>
+            $item->calle,
 
-            'barrio' =>
-                $item->barrio,
+        'esquina' =>
+            $item->esquina,
 
-            'descripcion' =>
-                $item->descripcion,
+        'esquina_2' =>
+            $item->esquina_2,
 
-            'latitud' =>
-                $item->latitud !== null
-                    ? (float) $item->latitud
-                    : null,
+        'municipio' =>
+            $item->municipio,
 
-            'longitud' =>
-                $item->longitud !== null
-                    ? (float) $item->longitud
-                    : null
+        'barrio' =>
+            $item->barrio,
+
+        'descripcion' =>
+            $item->descripcion,
+
+        'latitud' =>
+            $item->latitud !== null
+                ? (float) $item->latitud
+                : null,
+
+        'longitud' =>
+            $item->longitud !== null
+                ? (float) $item->longitud
+                : null
         ];
     }
 
@@ -1466,7 +1607,6 @@ public function reemplazar(Request $request, int $id)
             ->diffInDays($hoy);
     }
 
-    // Escala de 5 colores según los días que lleva el contenedor sin ser recolectado
     private function nivelDesdeDias(
         int $dias
     ): string {
@@ -1474,84 +1614,260 @@ public function reemplazar(Request $request, int $id)
             return 'verde';
         }
 
-        if ($dias === 3) {
+        if ($dias <= 5) {
             return 'amarillo';
         }
 
-        if ($dias === 4) {
-            return 'naranja';
-        }
-
-        if ($dias === 5) {
-            return 'rojo';
-        }
-
-        return 'negro';
+        return 'rojo';
     }
 
-    // Detecta el circuito y municipio según la latitud y longitud elegida en el mapa
-    private function detectarCircuitoPorCoordenadas(
-        float $lat,
-        float $lng
+   private function detectarCircuitoPorCoordenadas(
+    float $lat,
+    float $lng
     ): array {
-        // 1. Buscamos si el punto cae dentro del polígono de alguno de los circuitos activos
-        $circuitos = DB::table('circuitos')
+    $circuitos =
+        DB::table('circuitos')
             ->whereNotNull('coordenadas')
+            ->orderBy('id_circuito')
             ->get();
 
-        foreach ($circuitos as $circuito) {
-            $poligono = json_decode($circuito->coordenadas, true);
-            if (is_array($poligono) && count($poligono) >= 3) {
-                if ($this->puntoEnPoligono($lat, $lng, $poligono)) {
-                    return [
-                        'municipio' => $circuito->municipio ?: 'CH',
-                        'circuito' => $circuito->id_circuito
-                    ];
-                }
+    foreach ($circuitos as $circuito) {
+        $coordenadas =
+            json_decode(
+                $circuito->coordenadas,
+                true
+            );
+
+        if (!is_array($coordenadas)) {
+            continue;
+        }
+
+        $poligonos =
+            $this->normalizarPoligonos(
+                $coordenadas
+            );
+
+        foreach ($poligonos as $poligono) {
+            if (
+                $this->puntoEnPoligono(
+                    $lat,
+                    $lng,
+                    $poligono
+                )
+            ) {
+                return [
+                    'municipio' =>
+                        $circuito->municipio
+                        ?: $this->municipioDesdeCircuito(
+                            $circuito->id_circuito
+                        ),
+
+                    'circuito' =>
+                        $circuito->id_circuito
+                ];
             }
         }
-
-        // 2. Si no cae dentro de ningún polígono, usamos el primer circuito disponible en rutas
-        $primeraRuta = DB::table('rutas')
-            ->orderBy('circuito')
-            ->first();
-
-        if ($primeraRuta) {
-            return [
-                'municipio' => $primeraRuta->municipio ?: 'CH',
-                'circuito' => $primeraRuta->circuito
-            ];
-        }
-
-        return ['municipio' => 'CH', 'circuito' => 'CH_101'];
     }
 
-    // Comprueba de forma sencilla si una coordenada (lat, lng) está dentro de un polígono
-    private function puntoEnPoligono(
-        float $lat,
-        float $lng,
-        array $poligono
-    ): bool {
-        $dentro = false;
-        $total = count($poligono);
-        $j = $total - 1;
+    return [
+        'municipio' => null,
+        'circuito' => null
+    ];
+    }
 
-        for ($i = 0; $i < $total; $i++) {
-            $latI = is_array($poligono[$i]) ? (float) ($poligono[$i]['lat'] ?? $poligono[$i][0] ?? 0) : 0;
-            $lngI = is_array($poligono[$i]) ? (float) ($poligono[$i]['lng'] ?? $poligono[$i][1] ?? 0) : 0;
-            $latJ = is_array($poligono[$j]) ? (float) ($poligono[$j]['lat'] ?? $poligono[$j][0] ?? 0) : 0;
-            $lngJ = is_array($poligono[$j]) ? (float) ($poligono[$j]['lng'] ?? $poligono[$j][1] ?? 0) : 0;
+    private function normalizarPoligonos(
+    array $coordenadas
+    ): array {
+    $poligonos = [];
 
-            $intersecta = (($lngI > $lng) !== ($lngJ > $lng)) &&
-                ($lat < ($latJ - $latI) * ($lng - $lngI) / (($lngJ - $lngI) ?: 0.0000001) + $latI);
+    $this->extraerPoligonos(
+        $coordenadas,
+        $poligonos
+    );
 
-            if ($intersecta) {
-                $dentro = !$dentro;
+    return $poligonos;
+    }
+
+    private function extraerPoligonos(
+    array $nodo,
+    array &$poligonos
+    ): void {
+    if (empty($nodo)) {
+        return;
+    }
+
+    $primerPunto =
+        $this->normalizarPunto(
+            $nodo[0] ?? null
+        );
+
+    if ($primerPunto !== null) {
+        $poligono = [];
+
+        foreach ($nodo as $punto) {
+            $normalizado =
+                $this->normalizarPunto(
+                    $punto
+                );
+
+            if ($normalizado !== null) {
+                $poligono[] =
+                    $normalizado;
             }
-            $j = $i;
         }
 
-        return $dentro;
+        if (count($poligono) >= 3) {
+            $poligonos[] =
+                $poligono;
+        }
+
+        return;
+    }
+
+    foreach ($nodo as $hijo) {
+        if (is_array($hijo)) {
+            $this->extraerPoligonos(
+                $hijo,
+                $poligonos
+            );
+        }
+    }
+    }
+
+    private function normalizarPunto(
+    $punto
+    ): ?array {
+    if (!is_array($punto)) {
+        return null;
+    }
+
+    if (
+        array_key_exists('lat', $punto) &&
+        array_key_exists('lng', $punto) &&
+        is_numeric($punto['lat']) &&
+        is_numeric($punto['lng'])
+    ) {
+        return [
+            (float) $punto['lat'],
+            (float) $punto['lng']
+        ];
+    }
+
+    if (
+        array_key_exists(0, $punto) &&
+        array_key_exists(1, $punto) &&
+        is_numeric($punto[0]) &&
+        is_numeric($punto[1])
+    ) {
+        return [
+            (float) $punto[0],
+            (float) $punto[1]
+        ];
+    }
+
+    return null;
+    }
+
+    private function municipioDesdeCircuito(
+    ?string $codigo
+    ): string {
+    $codigo = strtoupper(
+        trim(
+            (string) $codigo
+        )
+    );
+
+    if (
+        $codigo !== '' &&
+        str_contains($codigo, '_')
+    ) {
+        return explode(
+            '_',
+            $codigo
+        )[0];
+    }
+
+    return 'CH';
+    }
+
+    private function puntoEnPoligono(
+    float $lat,
+    float $lng,
+    array $poligono
+    ): bool {
+    $total = count($poligono);
+
+    if ($total < 3) {
+        return false;
+    }
+
+    $dentro = false;
+    $j = $total - 1;
+
+    for (
+        $i = 0;
+        $i < $total;
+        $i++
+    ) {
+        $latI =
+            is_array($poligono[$i])
+                ? (float) (
+                    $poligono[$i]['lat']
+                    ?? $poligono[$i][0]
+                    ?? 0
+                )
+                : 0;
+
+        $lngI =
+            is_array($poligono[$i])
+                ? (float) (
+                    $poligono[$i]['lng']
+                    ?? $poligono[$i][1]
+                    ?? 0
+                )
+                : 0;
+
+        $latJ =
+            is_array($poligono[$j])
+                ? (float) (
+                    $poligono[$j]['lat']
+                    ?? $poligono[$j][0]
+                    ?? 0
+                )
+                : 0;
+
+        $lngJ =
+            is_array($poligono[$j])
+                ? (float) (
+                    $poligono[$j]['lng']
+                    ?? $poligono[$j][1]
+                    ?? 0
+                )
+                : 0;
+
+        $intersecta =
+            (($lngI > $lng) !==
+                ($lngJ > $lng))
+            &&
+            (
+                $lat <
+                ($latJ - $latI) *
+                ($lng - $lngI) /
+                (
+                    ($lngJ - $lngI)
+                    ?: 0.0000001
+                ) +
+                $latI
+            );
+
+        if ($intersecta) {
+            $dentro = !$dentro;
+        }
+
+        $j = $i;
+    }
+
+    return $dentro;
     }
 
     private function etiquetaDias(

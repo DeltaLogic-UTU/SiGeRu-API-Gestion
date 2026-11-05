@@ -41,6 +41,7 @@ class ReclamoController extends Controller
             Rule::in([
                 'Contenedor desbordado',
                 'Contenedor roto',
+                'Contenedor incendiado',
                 'Residuos fuera de lugar',
                 'Demora en la recolección',
                 'Riesgo sanitario / contaminación biológica'
@@ -71,7 +72,9 @@ class ReclamoController extends Controller
             'string'
         ],
         'id_contenedor' => [
-            'nullable'
+            'nullable',
+            'integer',
+            Rule::exists('contenedores', 'id_contenedor')
         ],
         'foto' => [
             'nullable'
@@ -81,6 +84,7 @@ class ReclamoController extends Controller
     $categorias = [
         'Contenedor desbordado' => 'Contenedores',
         'Contenedor roto' => 'Contenedores',
+        'Contenedor incendiado' => 'Contenedores',
         'Residuos fuera de lugar' => 'Residuos',
         'Demora en la recolección' => 'Recolección',
         'Riesgo sanitario / contaminación biológica' => 'Riesgo sanitario'
@@ -109,38 +113,99 @@ class ReclamoController extends Controller
     }
 
     $idContenedor = $datos['id_contenedor'] ?? null;
-    if ($idContenedor) {
-        $existeContenedor = DB::table('contenedores')->where('id_contenedor', $idContenedor)->exists();
-        if (!$existeContenedor) {
-            $idContenedor = null;
-        }
-    }
-
+    
     try {
-        DB::table('reclamos')->insert([
-            'id_reclamo' => $id,
-            'id_usuario' => $dato->id_usuario,
-            'reclamante' => trim(
-                ($usuario->nombre ?? '') . ' ' .
-                ($usuario->apellido ?? '')
-            ),
-            'contacto' => $dato->email,
-            'categoria' => $categoria,
-            'tipo' => $datos['tipo'],
-            'zona' => $datos['zona'],
-            'referencia' => $datos['referencia'],
-            'ubicacion' => trim($datos['zona'] . ' - ' . $datos['referencia']),
-            'descripcion' => $datos['descripcion'],
-            'foto' => $foto,
-            'estado' => 'sin_asignar',
-            'prioridad' => null,
-            'id_cuadrilla' => null,
-            'id_contenedor' => $idContenedor,
-            'fecha_reporte' => now(),
-            'fecha_finalizacion' => null,
-            'resultado' => null,
-            'notificado' => 0
-        ]);
+        DB::transaction(function () use (
+            $id,
+            $dato,
+            $usuario,
+            $categoria,
+            $datos,
+            $foto,
+            $idContenedor
+        ) {
+            DB::table('reclamos')->insert([
+                'id_reclamo' => $id,
+                'id_usuario' => $dato->id_usuario,
+                'reclamante' => trim(
+                    ($usuario->nombre ?? '') . ' ' .
+                    ($usuario->apellido ?? '')
+                ),
+                'contacto' => $dato->email,
+                'categoria' => $categoria,
+                'tipo' => $datos['tipo'],
+                'zona' => $datos['zona'],
+                'referencia' => $datos['referencia'],
+                'ubicacion' => trim($datos['zona'] . ' - ' . $datos['referencia']),
+                'descripcion' => $datos['descripcion'],
+                'foto' => $foto,
+                'estado' => 'sin_asignar',
+                'prioridad' => null,
+                'id_cuadrilla' => null,
+                'id_contenedor' => $idContenedor,
+                'fecha_reporte' => now(),
+                'fecha_finalizacion' => null,
+                'resultado' => null,
+                'notificado' => 0
+            ]);
+
+            if (
+                $idContenedor &&
+                in_array(
+                    $datos['tipo'],
+                    ['Contenedor roto', 'Contenedor incendiado'],
+                    true
+                )
+            ) {
+                $estadoContenedor =
+                    $datos['tipo'] === 'Contenedor incendiado'
+                        ? 'incendiado'
+                        : 'roto';
+
+                $tipoIncidencia =
+                    $datos['tipo'] === 'Contenedor incendiado'
+                        ? 'Incendio'
+                        : 'Rotura';
+
+                DB::table('contenedores')
+                    ->where('id_contenedor', $idContenedor)
+                    ->update([
+                        'estado' => $estadoContenedor
+                    ]);
+
+                DB::table('incidencias')->insert([
+                    'tipo_recurso' => 'contenedor',
+                    'id_camion' => null,
+                    'id_contenedor' => $idContenedor,
+                    'tipo' => $tipoIncidencia,
+                    'estado' => 'Abierta',
+                    'fecha_reporte' => now(),
+                    'fecha_resolucion' => null,
+                    'descripcion' =>
+                        $datos['descripcion'] .
+                        ' Reportado por vecino desde reclamo ' .
+                        $id . '.',
+                    'responsable' => null,
+                    'resolucion' => null,
+                    'id_cuadrilla' => null
+                ]);
+
+                DB::table('historial_contenedores')->insert([
+                    'id_contenedor' => $idContenedor,
+                    'fecha' => now(),
+                    'estado_anterior' => null,
+                    'estado_nuevo' => $estadoContenedor,
+                    'id_ubicacion_anterior' => null,
+                    'id_ubicacion_nueva' => null,
+                    'motivo' =>
+                        'Incidencia: ' .
+                        $tipoIncidencia .
+                        ' reportada por vecino (' .
+                        $id .
+                        ').'
+                ]);
+            }
+        });
     } catch (\Throwable $error) {
         if ($ruta ?? false) {
             Storage::disk('public')->delete($ruta);

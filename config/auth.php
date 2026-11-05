@@ -16,7 +16,6 @@ return [
     */
 
     'defaults' => [
-        // Se usa el guard 'api' (JWT) por defecto.
         'guard' => env('AUTH_GUARD', 'api'),
         'passwords' => env('AUTH_PASSWORD_BROKER', 'users'),
     ],
@@ -44,7 +43,6 @@ return [
             'provider' => 'users',
         ],
 
-        // Guard 'api' con driver 'jwt' para validar los tokens en las rutas privadas.
         'api' => [
             'driver' => 'jwt',
             'provider' => 'datos',
@@ -74,7 +72,6 @@ return [
             'model' => env('AUTH_MODEL', User::class),
         ],
 
-        // Provider personalizado que apunta al modelo Dato (tabla 'datos').
         'datos' => [
             'driver' => 'eloquent',
             'model' => \App\Models\Dato::class,

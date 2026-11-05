@@ -4,6 +4,7 @@ namespace App\Http\Controllers;
 
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\DB;
+use Illuminate\Support\Facades\Schema;
 use Illuminate\Validation\Rule;
 
 class CamionController extends Controller
@@ -43,11 +44,8 @@ class CamionController extends Controller
         ]);
     }
 
-    
-    public function actualizarFoto(
-        Request $request,
-        int $id
-    ) {
+    public function actualizarFoto(Request $request, int $id)
+    {
         $camion = DB::table('camiones')
             ->where('id_camion', $id)
             ->where('activo', true)
@@ -60,11 +58,59 @@ class CamionController extends Controller
             ], 404);
         }
 
-        $foto = $request->input('foto');
+        if (!Schema::hasColumn('camiones', 'foto')) {
+            return response()->json([
+                'success' => false,
+                'message' => 'La columna foto no existe en camiones.'
+            ], 422);
+        }
+
+        $datos = $request->validate([
+            'foto' => [
+                'present',
+                'nullable',
+                'string',
+                'max:8000000'
+            ]
+        ]);
+
+        $foto = $datos['foto'];
+
+        if ($foto !== null && !preg_match(
+            '~\Adata:image/(?:png|jpeg|webp|gif);base64,[A-Za-z0-9+/]+={0,2}\z~i',
+            $foto
+        )) {
+            return response()->json([
+                'success' => false,
+                'message' => 'La foto debe ser una imagen JPG, PNG, WebP o GIF.'
+            ], 422);
+        }
+
+        if ($foto !== null) {
+            $base64 = substr(
+                $foto,
+                strpos($foto, ',') + 1
+            );
+
+            $contenido = base64_decode($base64, true);
+
+            if (
+                $contenido === false ||
+                strlen($contenido) > 5 * 1024 * 1024
+            ) {
+                return response()->json([
+                    'success' => false,
+                    'message' => 'La imagen es inválida o supera los 5 MB.'
+                ], 422);
+            }
+        }
 
         DB::table('camiones')
             ->where('id_camion', $id)
-            ->update(['foto' => $foto]);
+            ->where('activo', true)
+            ->update([
+                'foto' => $foto
+            ]);
 
         return response()->json([
             'success' => true,
@@ -146,6 +192,35 @@ class CamionController extends Controller
 
         $datos = $this->validarCamion($request);
 
+        if (!empty($datos['foto'])) {
+            if (!preg_match(
+                '~\Adata:image/(?:png|jpeg|webp|gif);base64,[A-Za-z0-9+/]+={0,2}\z~i',
+                $datos['foto']
+            )) {
+                return response()->json([
+                    'success' => false,
+                    'message' => 'La foto debe ser una imagen JPG, PNG, WebP o GIF.'
+                ], 422);
+            }
+
+            $base64 = substr(
+                $datos['foto'],
+                strpos($datos['foto'], ',') + 1
+            );
+
+            $contenido = base64_decode($base64, true);
+
+            if (
+                $contenido === false ||
+                strlen($contenido) > 5 * 1024 * 1024
+            ) {
+                return response()->json([
+                    'success' => false,
+                    'message' => 'La imagen es inválida o supera los 5 MB.'
+                ], 422);
+            }
+        }
+
         if (!empty($datos['id_chofer'])) {
             $error = $this->validarChofer(
                 (int) $datos['id_chofer']
@@ -168,21 +243,28 @@ class CamionController extends Controller
                 'modelo' => $datos['modelo'],
                 'chasis' => $datos['chasis'],
                 'km_total' => $datos['km_total'],
+
                 'ult_carga_combustible' =>
                     $datos['ult_carga_combustible'] ?? null,
+
                 'activo' => true,
                 'km_en_turno' => 0,
                 'tiempo_activo' => '00:00:00',
                 'gps' => $datos['gps'] ?? null,
-                'foto' => $datos['foto'] ?? null,
-                'capacidad_kg' => $datos['capacidad_kg'] ?? null,
+
+                'capacidad_kg' =>
+                    $datos['capacidad_kg'] ?? null,
+
                 'peso_recolectado_kg' => 0,
                 'contenedores_asignados' => 0,
                 'contenedores_recolectados' => 0,
+
                 'turno' => $datos['turno'] ?? null,
                 'id_chofer' => $datos['id_chofer'] ?? null,
                 'id_cuadrilla' => null,
-                'id_ruta' => null
+                'id_ruta' => null,
+
+                'foto' => $datos['foto'] ?? null
             ]);
 
             if (!empty($datos['id_chofer'])) {
@@ -314,6 +396,7 @@ class CamionController extends Controller
             'message' => $idChofer !== null
                 ? 'Chofer asignado correctamente.'
                 : 'Chofer quitado correctamente.',
+
             'data' => $this->formatearCamion(
                 $this->obtenerCamion($id)
             )
@@ -370,28 +453,15 @@ class CamionController extends Controller
             'message' => $idCuadrilla !== null
                 ? 'Cuadrilla asignada correctamente.'
                 : 'Cuadrilla quitada correctamente.',
+
             'data' => $this->formatearCamion(
                 $this->obtenerCamion($id)
             )
         ]);
     }
 
-    public function asignarRuta(
-        Request $request,
-        int $id
-    ) {
-        $camion = DB::table('camiones')
-            ->where('id_camion', $id)
-            ->where('activo', true)
-            ->first();
-
-        if (!$camion) {
-            return response()->json([
-                'success' => false,
-                'message' => 'Camión no encontrado.'
-            ], 404);
-        }
-
+    public function asignarRuta(Request $request, int $id)
+    {
         $datos = $request->validate([
             'id_ruta' => [
                 'nullable',
@@ -404,32 +474,113 @@ class CamionController extends Controller
             ? (int) $datos['id_ruta']
             : null;
 
-        $idRutaActual = $camion->id_ruta !== null
-            ? (int) $camion->id_ruta
-            : null;
-
-        if ($idRutaActual === $idRuta) {
-            return response()->json([
-                'success' => true,
-                'message' => 'La asignación no tuvo cambios.',
-                'data' => $this->formatearCamion(
-                    $this->obtenerCamion($id)
-                )
-            ]);
-        }
-
-        $this->actualizarAsignacion(
+        $resultado = DB::transaction(function () use (
             $id,
-            [
-                'id_ruta' => $idRuta
-            ]
-        );
+            $idRuta
+        ) {
+            $camion = DB::table('camiones')
+                ->where('id_camion', $id)
+                ->where('activo', true)
+                ->lockForUpdate()
+                ->first();
+
+            if (!$camion) {
+                return [
+                    'error' => 'Camión no encontrado.',
+                    'status' => 404
+                ];
+            }
+
+            $idRutaActual = $camion->id_ruta !== null
+                ? (int) $camion->id_ruta
+                : null;
+
+            $despacho = DB::table('ruta_despachos')
+                ->where('id_camion', $id)
+                ->lockForUpdate()
+                ->first();
+
+            $recoleccionActiva = DB::table('recolecciones')
+                ->where('id_camion', $id)
+                ->where('estado', 'En curso')
+                ->exists();
+
+            if (
+                $recoleccionActiva &&
+                $idRutaActual !== $idRuta
+            ) {
+                return [
+                    'error' =>
+                        'No se puede modificar la ruta mientras el chofer está en recorrido.',
+                    'status' => 409
+                ];
+            }
+
+            if (
+                $despacho &&
+                $idRuta !== null &&
+                (int) $despacho->id_ruta !== $idRuta
+            ) {
+                return [
+                    'error' =>
+                        'El camión tiene una ruta despachada. Primero debés quitarla.',
+                    'status' => 409
+                ];
+            }
+
+            if ($idRuta === null && $despacho) {
+                $estadoDespacho = mb_strtolower(
+                    trim((string) $despacho->estado),
+                    'UTF-8'
+                );
+
+                if (
+                    $recoleccionActiva ||
+                    $estadoDespacho !== 'enviada al chofer'
+                ) {
+                    return [
+                        'error' =>
+                            'No se puede cancelar este despacho porque ya no está pendiente.',
+                        'status' => 409
+                    ];
+                }
+
+                DB::table('ruta_despachos')
+                    ->where('id_camion', $id)
+                    ->delete();
+            }
+
+            if ($idRutaActual !== $idRuta) {
+                $this->actualizarAsignacion(
+                    $id,
+                    [
+                        'id_ruta' => $idRuta
+                    ]
+                );
+            }
+
+            return [
+                'message' =>
+                    $idRutaActual === $idRuta && !$despacho
+                        ? 'La asignación no tuvo cambios.'
+                        : (
+                            $idRuta === null
+                                ? 'Ruta quitada correctamente.'
+                                : 'Ruta asignada correctamente.'
+                        )
+            ];
+        });
+
+        if (isset($resultado['error'])) {
+            return response()->json([
+                'success' => false,
+                'message' => $resultado['error']
+            ], $resultado['status']);
+        }
 
         return response()->json([
             'success' => true,
-            'message' => $idRuta !== null
-                ? 'Ruta asignada correctamente.'
-                : 'Ruta quitada correctamente.',
+            'message' => $resultado['message'],
             'data' => $this->formatearCamion(
                 $this->obtenerCamion($id)
             )
@@ -489,7 +640,8 @@ class CamionController extends Controller
         if ($asignacion->estado_ruta === $datos['estado']) {
             return response()->json([
                 'success' => true,
-                'message' => 'El estado de la ruta no tuvo cambios.',
+                'message' =>
+                    'El estado de la ruta no tuvo cambios.',
                 'data' => $this->formatearCamion(
                     $this->obtenerCamion($id)
                 )
@@ -497,7 +649,10 @@ class CamionController extends Controller
         }
 
         DB::table('camion_asignaciones')
-            ->where('id_asignacion', $asignacion->id_asignacion)
+            ->where(
+                'id_asignacion',
+                $asignacion->id_asignacion
+            )
             ->update([
                 'estado_ruta' => $datos['estado']
             ]);
@@ -526,10 +681,7 @@ class CamionController extends Controller
             'tipo' => [
                 'required',
                 'string',
-                Rule::exists(
-                    'tipo_residuo',
-                    'tipo'
-                )
+                Rule::exists('tipo_residuo', 'tipo')
             ],
 
             'estado' => [
@@ -569,7 +721,6 @@ class CamionController extends Controller
                 'min:0'
             ],
 
-            'foto' => ['nullable', 'string'],
             'ult_carga_combustible' => [
                 'nullable',
                 'date'
@@ -599,6 +750,12 @@ class CamionController extends Controller
                 'nullable',
                 'integer',
                 'exists:chofer,id_usuario'
+            ],
+
+            'foto' => [
+                'nullable',
+                'string',
+                'max:8000000'
             ]
         ]);
     }
@@ -691,7 +848,9 @@ class CamionController extends Controller
                 return;
             }
 
-            $asignacionActual = DB::table('camion_asignaciones')
+            $asignacionActual = DB::table(
+                'camion_asignaciones'
+            )
                 ->where('id_camion', $id)
                 ->whereNull('fecha_finalizacion')
                 ->orderByDesc('fecha_asignacion')
@@ -732,8 +891,10 @@ class CamionController extends Controller
 
             if ($rutaNueva === null) {
                 $estadoRuta = null;
+
             } elseif ($cambioRuta) {
                 $estadoRuta = 'Asignada';
+
             } else {
                 $estadoRuta =
                     $asignacionActual->estado_ruta
@@ -814,7 +975,6 @@ class CamionController extends Controller
                 'c.km_en_turno',
                 'c.tiempo_activo',
                 'c.gps',
-                'c.foto',
                 'c.capacidad_kg',
                 'c.peso_recolectado_kg',
                 'c.contenedores_asignados',
@@ -823,6 +983,7 @@ class CamionController extends Controller
                 'c.id_chofer',
                 'c.id_cuadrilla',
                 'c.id_ruta',
+                'c.foto',
 
                 'u.nombre as chofer_nombre',
                 'u.apellido as chofer_apellido',
@@ -831,20 +992,32 @@ class CamionController extends Controller
                 'r.nombre as ruta_nombre',
 
                 'ca.estado_ruta as ruta_estado'
-            );
+            )
+            ->selectSub(function ($query) {
+                $query->from(
+                    'recolecciones as rec_activa'
+                )
+                    ->selectRaw('COUNT(*)')
+                    ->whereColumn(
+                        'rec_activa.id_camion',
+                        'c.id_camion'
+                    )
+                    ->where(
+                        'rec_activa.estado',
+                        'En curso'
+                    );
+            }, 'recolecciones_activas');
     }
 
-    private function obtenerCamion(
-        int $id
-    ) {
+    private function obtenerCamion(int $id)
+    {
         return $this->consultaCamiones()
             ->where('c.id_camion', $id)
             ->first();
     }
 
-    private function formatearCamion(
-        $item
-    ): array {
+    private function formatearCamion($item): array
+    {
         $chofer = trim(
             implode(
                 ' ',
@@ -855,28 +1028,25 @@ class CamionController extends Controller
             )
         );
 
-        $gpsStr = $item->gps;
-        $ubicacion = 'Base: Cantón del Buceo';
-        $lat = null;
-        $lng = null;
-        if (!empty($gpsStr) && str_contains($gpsStr, ',')) {
-            $partes = explode(',', $gpsStr);
-            if (count($partes) === 2 && is_numeric(trim($partes[0])) && is_numeric(trim($partes[1]))) {
-                $lat = (float) trim($partes[0]);
-                $lng = (float) trim($partes[1]);
-                $ubicacion = $lat . ', ' . $lng;
-            }
-        }
-
         return [
             'id_camion' => (int) $item->id_camion,
-            'foto' => $item->foto ?? null,
-            'ubicacion' => $ubicacion,
-            'latitud' => $lat,
-            'longitud' => $lng,
             'matricula' => $item->matricula,
+            'foto' => $item->foto ?? null,
             'tipo' => $item->tipo,
             'estado' => $item->estado,
+
+            'recorrido_activo' =>
+                (int) (
+                    $item->recolecciones_activas ?? 0
+                ) > 0,
+
+            'estado_operativo' =>
+                (int) (
+                    $item->recolecciones_activas ?? 0
+                ) > 0
+                    ? 'En recorrido'
+                    : 'En base',
+
             'marca' => $item->marca,
             'modelo' => $item->modelo,
             'chasis' => $item->chasis,
@@ -941,9 +1111,8 @@ class CamionController extends Controller
         ];
     }
 
-    private function obtenerHistorial(
-        int $id
-    ) {
+    private function obtenerHistorial(int $id)
+    {
         $incidencias = DB::table('incidencias')
             ->where('id_camion', $id)
             ->where('tipo_recurso', 'camion')
@@ -1009,5 +1178,58 @@ class CamionController extends Controller
             ->concat($mantenimientos)
             ->sortByDesc('fecha')
             ->values();
+    }
+
+    public function mapaPublico()
+    {
+    $camiones = DB::table('camiones as c')
+        ->where('c.activo', 1)
+        ->whereNotNull('c.gps')
+        ->whereExists(function ($consulta) {
+            $consulta->selectRaw('1')
+                ->from('recolecciones as r')
+                ->whereColumn('r.id_camion', 'c.id_camion')
+                ->where('r.estado', 'En curso');
+        })
+        ->select('c.gps')
+        ->get();
+
+    $posiciones = [];
+
+    foreach ($camiones as $camion) {
+        $partes = array_map(
+            'trim',
+            explode(',', (string) $camion->gps)
+        );
+
+        if (
+            count($partes) !== 2 ||
+            !is_numeric($partes[0]) ||
+            !is_numeric($partes[1])
+        ) {
+            continue;
+        }
+
+        $latitud = (float) $partes[0];
+        $longitud = (float) $partes[1];
+
+        if (
+            abs($latitud) > 90 ||
+            abs($longitud) > 180 ||
+            ($latitud === 0.0 && $longitud === 0.0)
+        ) {
+            continue;
+        }
+
+        $posiciones[] = [
+            'latitud' => $latitud,
+            'longitud' => $longitud
+        ];
+    }
+
+    return response()->json([
+        'success' => true,
+        'data' => $posiciones
+    ]);
     }
 }

@@ -45,7 +45,6 @@ class CircuitoSeeder extends Seeder
             $lat = $centro[0];
             $lng = $centro[1];
 
-            // Delimitamos un polígono alrededor de los contenedores del circuito
             $poligono = [
                 [round($lat - 0.0022, 6), round($lng - 0.0055, 6)],
                 [round($lat - 0.0022, 6), round($lng + 0.0055, 6)],

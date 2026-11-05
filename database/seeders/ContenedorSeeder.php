@@ -95,7 +95,6 @@ class ContenedorSeeder extends Seeder
             3
         ];
 
-        // Coordenadas centrales de referencia en Montevideo para cada circuito del dump
         $centrosCircuito = [
             'A_101' => [-34.8620, -56.2180],
             'A_102' => [-34.8540, -56.2250],
@@ -128,7 +127,6 @@ class ContenedorSeeder extends Seeder
             'G_103' => [-34.8080, -56.2220],
         ];
 
-        // Días variados para los 10 contenedores de cada circuito (muestra los 5 colores: verde, amarillo, naranja, rojo y negro)
         $diasEjemplo = [1, 2, 2, 3, 3, 4, 4, 5, 6, 7];
 
         foreach ($rutas as $ruta) {
@@ -138,7 +136,6 @@ class ContenedorSeeder extends Seeder
                 $numero =
                     $indice + 1;
 
-                // Ubicamos los 10 contenedores del circuito en una cuadrícula prolija de 2 filas x 5 columnas
                 $fila = intdiv($indice, 5);
                 $columna = ($indice % 5) - 2;
                 $latitud = round($centro[0] + ($fila * 0.0018), 6);
@@ -166,7 +163,6 @@ class ContenedorSeeder extends Seeder
                     ->where('codigo', $codigo)
                     ->first();
 
-                // Si el contenedor ya existe del dump SQL, actualizamos sus coordenadas y días de ejemplo para verlo en el mapa
                 if ($existente) {
                     if ($existente->id_ubicacion) {
                         DB::table('ubicacion')
@@ -180,7 +176,10 @@ class ContenedorSeeder extends Seeder
                     DB::table('contenedores')
                         ->where('id_contenedor', $existente->id_contenedor)
                         ->update([
-                            'dias_sin_recoleccion' => $diasSinRecoleccion
+                            'dias_sin_recoleccion' => $diasSinRecoleccion,
+                            'ultimo_registro' => Carbon::today()
+                                ->subDays($diasSinRecoleccion)
+                                ->toDateString()
                         ]);
 
                     continue;

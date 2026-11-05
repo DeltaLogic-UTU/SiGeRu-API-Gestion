@@ -8,68 +8,84 @@ use Illuminate\Support\Facades\Schema;
 
 class RecoleccionController extends Controller
 {
-    private function archivoDespachos(): string
-    {
-        $rutaCompartida = dirname(base_path()) . DIRECTORY_SEPARATOR . 'SiGeRu-API-Recoleccion' . DIRECTORY_SEPARATOR . 'storage' . DIRECTORY_SEPARATOR . 'app' . DIRECTORY_SEPARATOR . 'rutas_despachadas.json';
-        if (is_dir(dirname($rutaCompartida))) {
-            return $rutaCompartida;
-        }
-        return storage_path('app/rutas_despachadas.json');
-    }
-
     private function leerDespachos(): array
     {
-        $archivo = $this->archivoDespachos();
-        if (!file_exists($archivo)) {
+        if (!Schema::hasTable('ruta_despachos')) {
             return [];
         }
 
-        $datos = json_decode(file_get_contents($archivo) ?: '{}', true);
-        return is_array($datos) ? $datos : [];
-    }
+        $filas = DB::table('ruta_despachos')->get();
+        $despachos = [];
 
-    private function guardarDespachos(array $despachos): void
-    {
-        $archivo = $this->archivoDespachos();
-        if (!is_dir(dirname($archivo))) {
-            mkdir(dirname($archivo), 0775, true);
+        foreach ($filas as $fila) {
+            $despachos[(string) $fila->id_camion] = [
+                'id_camion' => (int) $fila->id_camion,
+                'matricula' => $fila->matricula,
+                'id_chofer' => $fila->id_chofer !== null ? (int) $fila->id_chofer : null,
+                'id_ruta' => $fila->id_ruta !== null ? (int) $fila->id_ruta : null,
+                'circuitos' => json_decode($fila->circuitos ?: '[]', true) ?: [],
+                'ids_contenedores' => json_decode($fila->ids_contenedores ?: '[]', true) ?: [],
+                'contenedores_procesados' => json_decode($fila->contenedores_procesados ?: '{}', true) ?: [],
+                'geometriaCalles' => json_decode($fila->geometria_calles ?: '[]', true) ?: [],
+                'distanciaKm' => (float) ($fila->distancia_km ?? 0),
+                'km_recorridos' => (float) ($fila->km_recorridos ?? 0),
+                'incidencias_creadas' => (int) ($fila->incidencias_creadas ?? 0),
+                'estado' => $fila->estado,
+                'fecha_envio' => $fila->fecha_envio,
+            ];
         }
 
-        file_put_contents(
-            $archivo,
-            json_encode($despachos, JSON_PRETTY_PRINT | JSON_UNESCAPED_UNICODE)
+        return $despachos;
+    }
+
+    
+    private function guardarDespachos(array $despachos): void
+    {
+    if (!Schema::hasTable('ruta_despachos')) {
+        throw new \RuntimeException(
+            'Falta la tabla ruta_despachos.'
         );
     }
 
-
-    //Lee y guarda el Historial de la ruta a JSON
-    private function archivoHistorial(): string
-{
-    $rutaCompartida = dirname(base_path()) . DIRECTORY_SEPARATOR . 'SiGeRu-API-Recoleccion' . DIRECTORY_SEPARATOR . 'storage' . DIRECTORY_SEPARATOR . 'app' . DIRECTORY_SEPARATOR . 'rutas_historial.json';
-    if (is_dir(dirname($rutaCompartida))) {
-        return $rutaCompartida;
+    foreach ($despachos as $d) {
+        DB::table('ruta_despachos')->updateOrInsert(
+            ['id_camion' => (int) $d['id_camion']],
+            [
+                'matricula' => $d['matricula'] ?? null,
+                'id_chofer' => $d['id_chofer'] ?? null,
+                'id_ruta' => $d['id_ruta'] ?? null,
+                'circuitos' => json_encode(
+                    $d['circuitos'] ?? []
+                ),
+                'ids_contenedores' => json_encode(
+                    $d['ids_contenedores'] ?? []
+                ),
+                'contenedores_procesados' => json_encode(
+                    (object) ($d['contenedores_procesados'] ?? [])
+                ),
+                'geometria_calles' => json_encode(
+                    $d['geometriaCalles'] ?? []
+                ),
+                'distancia_km' =>
+                    (float) ($d['distanciaKm'] ?? 0),
+                'km_recorridos' =>
+                    (float) ($d['km_recorridos'] ?? 0),
+                'incidencias_creadas' =>
+                    (int) ($d['incidencias_creadas'] ?? 0),
+                'estado' =>
+                    $d['estado'] ?? 'Enviada al chofer',
+                'fecha_envio' => !empty($d['fecha_envio'])
+                    ? \Carbon\Carbon::parse(
+                        $d['fecha_envio']
+                    )->format('Y-m-d H:i:s')
+                    : now(),
+                'updated_at' => now(),
+            ]
+        );
     }
-    return storage_path('app/rutas_historial.json');
-}
-
-private function leerHistorial(): array
-{
-    $archivo = $this->archivoHistorial();
-    if (!file_exists($archivo)) return [];
-    return json_decode(file_get_contents($archivo) ?: '[]', true) ?: [];
-}
-
-private function guardarHistorial(array $historial): void
-{
-    $archivo = $this->archivoHistorial();
-    if (!is_dir(dirname($archivo))) {
-        mkdir(dirname($archivo), 0775, true);
     }
-    file_put_contents($archivo, json_encode($historial, JSON_PRETTY_PRINT | JSON_UNESCAPED_UNICODE));
-}
 
 
-    // Lista todas las recolecciones registradas
     public function index()
     {
         $recolecciones = DB::table('recolecciones as r')
@@ -89,81 +105,217 @@ private function guardarHistorial(array $historial): void
         ]);
     }
 
-    // Recibe la ruta enviada por el Administrador y la deja asignada al chofer
+    
     public function despacharRuta(Request $request)
     {
-        $datos = $request->validate([
-            'id_camion' => 'required|integer|exists:camiones,id_camion',
-            'id_ruta' => 'nullable|integer',
-            'circuitos' => 'required|array|min:1',
-            'contenedores' => 'required|array|min:1',
-            'geometriaCalles' => 'required|array|min:2',
-            'distanciaKm' => 'required|numeric|min:0'
-        ]);
+    $datos = $request->validate([
+        'id_camion' => 'required|integer|exists:camiones,id_camion',
+        'id_ruta' => 'nullable|integer|exists:rutas,id_ruta',
+        'circuitos' => 'required|array|min:1',
+        'circuitos.*' =>
+            'required|string|exists:circuitos,id_circuito',
+        'contenedores' => 'required|array|min:1',
+        'contenedores.*.id_contenedor' =>
+            'required|integer|exists:contenedores,id_contenedor',
+        'geometriaCalles' => 'required|array|min:2',
+        'distanciaKm' => 'required|numeric|min:0',
+    ]);
 
-        $camion = DB::table('camiones')->where('id_camion', $datos['id_camion'])->first();
+    $resultado = DB::transaction(function () use ($datos) {
+        $camion = DB::table('camiones')
+            ->where('id_camion', $datos['id_camion'])
+            ->lockForUpdate()
+            ->first();
 
-        $idsContenedores = array_values(array_filter(array_map(
-            fn ($c) => isset($c['id_contenedor']) ? (int) $c['id_contenedor'] : null,
-            $datos['contenedores']
-        )));
+        if (
+            !$camion ||
+            !(int) $camion->activo ||
+            !$camion->id_chofer
+        ) {
+            return [
+                'error' =>
+                    'El camión debe estar activo y tener chofer.'
+            ];
+        }
 
-        $idRuta = $datos['id_ruta'] ?? $camion->id_ruta;
-        if (!empty($datos['circuitos'][0])) {
-            $primerCircuito = $datos['circuitos'][0];
-            $rutaRow = DB::table('rutas')->where('circuito', $primerCircuito)->first();
-            if (!$rutaRow) {
-                $circuitoRow = DB::table('circuitos')->where('id_circuito', $primerCircuito)->first();
-                if ($circuitoRow) {
-                    $idRuta = DB::table('rutas')->insertGetId([
-                        'circuito' => $primerCircuito,
-                        'nombre' => 'Circuito ' . $primerCircuito,
-                        'municipio' => $circuitoRow->municipio ?? 'A',
-                        'estado' => 'Asignada'
-                    ]);
-                }
-            } else {
-                $idRuta = $rutaRow->id_ruta;
+        if (
+            DB::table('ruta_despachos')
+                ->where('id_camion', $camion->id_camion)
+                ->exists()
+        ) {
+            return [
+                'error' =>
+                    'El camión ya tiene una ruta despachada.'
+            ];
+        }
+
+        if (
+            DB::table('recolecciones')
+                ->where('id_camion', $camion->id_camion)
+                ->where('estado', 'En curso')
+                ->exists()
+        ) {
+            return [
+                'error' =>
+                    'El camión tiene un recorrido en curso.'
+            ];
+        }
+
+        $circuitos = array_values(
+            array_unique($datos['circuitos'])
+        );
+
+        $rutas = DB::table('rutas')
+            ->whereIn('circuito', $circuitos)
+            ->orderBy('id_ruta')
+            ->lockForUpdate()
+            ->get();
+
+        $primera = $rutas->firstWhere(
+            'circuito',
+            $circuitos[0]
+        );
+
+        if (!$primera) {
+            return [
+                'error' =>
+                    'El primer circuito no tiene ruta registrada.'
+            ];
+        }
+
+        $idRuta = (int) $primera->id_ruta;
+
+        if (
+            isset($datos['id_ruta']) &&
+            (int) $datos['id_ruta'] !== $idRuta
+        ) {
+            return [
+                'error' =>
+                    'La ruta no corresponde al primer circuito.'
+            ];
+        }
+
+        $idRutas = $rutas
+            ->pluck('id_ruta')
+            ->map(fn ($id) => (int) $id)
+            ->all();
+
+        $otraAsignacion = DB::table('camiones')
+            ->where('activo', 1)
+            ->where(
+                'id_camion',
+                '<>',
+                $camion->id_camion
+            )
+            ->whereIn('id_ruta', $idRutas)
+            ->exists();
+
+        if ($otraAsignacion) {
+            return [
+                'error' =>
+                    'Un circuito ya está asignado a otro camión.'
+            ];
+        }
+
+        foreach (
+            DB::table('ruta_despachos')->get()
+            as $actual
+        ) {
+            $existentes = json_decode(
+                $actual->circuitos ?: '[]',
+                true
+            ) ?: [];
+
+            if (array_intersect($circuitos, $existentes)) {
+                return [
+                    'error' =>
+                        'Ya existe un despacho para uno de estos circuitos.'
+                ];
             }
         }
 
-        $despachos = $this->leerDespachos();
+        $ids = array_values(array_unique(array_map(
+            fn ($c) => (int) $c['id_contenedor'],
+            $datos['contenedores']
+        )));
+
+        $validos = DB::table('contenedores')
+            ->whereIn('id_contenedor', $ids)
+            ->where('activo', 1)
+            ->whereIn('circuito', $circuitos)
+            ->count();
+
+        if ($validos !== count($ids)) {
+            return [
+                'error' =>
+                    'Existen contenedores inactivos o de otros circuitos.'
+            ];
+        }
+
         $despacho = [
             'id_camion' => (int) $camion->id_camion,
             'matricula' => $camion->matricula,
-            'id_chofer' => $camion->id_chofer ? (int) $camion->id_chofer : null,
+            'id_chofer' => (int) $camion->id_chofer,
             'id_ruta' => $idRuta,
-            'circuitos' => $datos['circuitos'],
-            'ids_contenedores' => $idsContenedores,
+            'circuitos' => $circuitos,
+            'ids_contenedores' => $ids,
             'contenedores_procesados' => [],
             'geometriaCalles' => $datos['geometriaCalles'],
             'distanciaKm' => (float) $datos['distanciaKm'],
             'km_recorridos' => 0,
             'incidencias_creadas' => 0,
             'estado' => 'Enviada al chofer',
-            'fecha_envio' => now()->toIso8601String()
+            'fecha_envio' => now()->toIso8601String(),
         ];
 
-        $despachos[(string) $camion->id_camion] = $despacho;
-        $this->guardarDespachos($despachos);
+        $this->guardarDespachos([$despacho]);
 
         DB::table('camiones')
             ->where('id_camion', $camion->id_camion)
             ->update([
                 'id_ruta' => $idRuta,
-                'contenedores_asignados' => count($idsContenedores),
+                'contenedores_asignados' => count($ids),
                 'contenedores_recolectados' => 0,
-                'km_en_turno' => (float) $datos['distanciaKm']
+                'km_en_turno' => 0,
             ]);
 
-        return response()->json([
-            'success' => true,
-            'message' => 'Ruta enviada al chofer correctamente.',
-            'data' => $despacho
+        DB::table('camion_asignaciones')
+            ->where('id_camion', $camion->id_camion)
+            ->whereNull('fecha_finalizacion')
+            ->update([
+                'fecha_finalizacion' => now(),
+                'estado' => 'Finalizada'
+            ]);
+
+        DB::table('camion_asignaciones')->insert([
+            'id_camion' => $camion->id_camion,
+            'id_chofer' => $camion->id_chofer,
+            'id_cuadrilla' => $camion->id_cuadrilla,
+            'id_ruta' => $idRuta,
+            'fecha_asignacion' => now(),
+            'fecha_finalizacion' => null,
+            'estado' => 'Activa',
+            'estado_ruta' => 'Asignada',
         ]);
+
+        return ['despacho' => $despacho];
+    }, 3);
+
+    if (isset($resultado['error'])) {
+        return response()->json([
+            'success' => false,
+            'message' => $resultado['error']
+        ], 422);
     }
 
-    // Devuelve al chofer su camión, la ruta enviada por el administrador y los contenedores a levantar
+    return response()->json([
+        'success' => true,
+        'message' => 'Ruta enviada al chofer correctamente.',
+        'data' => $resultado['despacho'],
+    ]);
+    }
+
+
     public function rutaDeChofer(Request $request)
     {
         $usuarioToken = auth('api')->user();
@@ -193,16 +345,6 @@ private function guardarHistorial(array $historial): void
             $camion = $baseQuery()->where('c.id_chofer', (int) $idChofer)->first();
         }
 
-        if (!$camion && count($despachos) > 0) {
-            $ultimo = end($despachos);
-            if (!empty($ultimo['id_camion'])) {
-                $camion = $baseQuery()->where('c.id_camion', (int) $ultimo['id_camion'])->first();
-            }
-        }
-
-        if (!$camion) {
-            $camion = $baseQuery()->orderBy('c.id_camion')->first();
-        }
 
         if (!$camion) {
             return response()->json([
@@ -225,7 +367,7 @@ private function guardarHistorial(array $historial): void
                     'ct.tipo',
                     'ct.capacidad',
                     'ct.estado',
-                    'ct.dias_sin_recoleccion',
+                    DB::raw('GREATEST(0, COALESCE(DATEDIFF(CURDATE(), ct.ultimo_registro), ct.dias_sin_recoleccion, 0)) AS dias_sin_recoleccion'),
                     'ct.ultimo_registro',
                     'ct.circuito',
                     'ub.calle',
@@ -249,14 +391,14 @@ private function guardarHistorial(array $historial): void
                 ->leftJoin('ubicacion as ub', 'ub.id_ubicacion', '=', 'ct.id_ubicacion')
                 ->where('ct.activo', 1)
                 ->where('ct.circuito', $camion->ruta_circuito)
-                ->where('ct.dias_sin_recoleccion', '>=', 3)
+                ->whereRaw('GREATEST(0, COALESCE(DATEDIFF(CURDATE(), ct.ultimo_registro), ct.dias_sin_recoleccion, 0)) >= 3')
                 ->select(
                     'ct.id_contenedor',
                     'ct.codigo',
                     'ct.tipo',
                     'ct.capacidad',
                     'ct.estado',
-                    'ct.dias_sin_recoleccion',
+                    DB::raw('GREATEST(0, COALESCE(DATEDIFF(CURDATE(), ct.ultimo_registro), ct.dias_sin_recoleccion, 0)) AS dias_sin_recoleccion'),
                     'ct.ultimo_registro',
                     'ct.circuito',
                     'ub.calle',
@@ -267,11 +409,42 @@ private function guardarHistorial(array $historial): void
                 ->get();
         }
 
+        $idsContenedores = collect($contenedores)
+    ->pluck('id_contenedor')
+    ->map(fn ($id) => (int) $id)
+    ->all();
+
+    $idsConIncidencia = DB::table('incidencias')
+    ->where('tipo_recurso', 'contenedor')
+    ->whereIn('estado', ['Abierta', 'En curso'])
+    ->whereIn('id_contenedor', $idsContenedores)
+    ->pluck('id_contenedor')
+    ->map(fn ($id) => (int) $id)
+    ->all();
+
+    $contenedores = collect($contenedores)
+            ->map(function ($contenedor) use ($idsConIncidencia) {
+            $item = (array) $contenedor;
+
+            $item['incidencia_violeta'] = in_array(
+                (int) $item['id_contenedor'],
+                $idsConIncidencia,
+                 true
+             );
+
+            return $item;
+         })
+        ->values();
+
         $recoleccionActiva = DB::table('recolecciones')
             ->where('id_camion', $camion->id_camion)
             ->where('estado', 'En curso')
             ->orderByDesc('id_recoleccion')
             ->first();
+
+        $camion->recorrido_activo = $recoleccionActiva !== null;
+        $camion->estado_operativo = $recoleccionActiva !== null
+            ? 'En recorrido' : 'En base';
 
         return response()->json([
             'success' => true,
@@ -284,269 +457,588 @@ private function guardarHistorial(array $historial): void
         ]);
     }
 
-    // Inicia el viaje cuando el chofer presiona "Iniciar recorrido"
+    
     public function iniciarRecoleccion(Request $request)
     {
-        $datos = $request->validate([
-            'id_camion' => 'required|integer|exists:camiones,id_camion',
-            'id_ruta' => 'nullable|integer',
-            'tipo' => 'nullable|string|max:30'
-        ]);
+    $datos = $request->validate([
+        'id_camion' =>
+            'required|integer|exists:camiones,id_camion',
+        'id_ruta' =>
+            'nullable|integer|exists:rutas,id_ruta',
+        'tipo' =>
+            'nullable|string|exists:tipo_residuo,tipo',
+    ]);
 
-        $camion = DB::table('camiones')->where('id_camion', $datos['id_camion'])->first();
+    $resultado = DB::transaction(function () use ($datos) {
+        $camion = DB::table('camiones')
+            ->where('id_camion', $datos['id_camion'])
+            ->lockForUpdate()
+            ->first();
+
+        if (
+            !$camion ||
+            !(int) $camion->activo ||
+            !$camion->id_chofer
+        ) {
+            return [
+                'error' => 'El camión no está habilitado.'
+            ];
+        }
 
         $existente = DB::table('recolecciones')
-            ->where('id_camion', $datos['id_camion'])
+            ->where('id_camion', $camion->id_camion)
             ->where('estado', 'En curso')
-            ->orderByDesc('id_recoleccion')
             ->first();
 
         if ($existente) {
-            return response()->json([
-                'success' => true,
-                'message' => 'Recorrido en curso.',
-                'data' => [
-                    'id_recoleccion' => $existente->id_recoleccion
-                ]
-            ]);
+            return [
+                'id' => (int) $existente->id_recoleccion,
+                'nuevo' => false
+            ];
         }
 
-        $idRecoleccion = DB::table('recolecciones')->insertGetId([
-            'id_camion' => $datos['id_camion'],
-            'id_ruta' => $datos['id_ruta'] ?? $camion->id_ruta,
-            'id_cuadrilla' => $camion->id_cuadrilla ?? null,
+        $despacho = DB::table('ruta_despachos')
+            ->where('id_camion', $camion->id_camion)
+            ->lockForUpdate()
+            ->first();
+
+        if (!$despacho) {
+            return [
+                'error' =>
+                    'El chofer todavía no tiene una ruta despachada.'
+            ];
+        }
+
+        if (
+            isset($datos['id_ruta']) &&
+            (int) $datos['id_ruta'] !==
+            (int) $despacho->id_ruta
+        ) {
+            return [
+                'error' =>
+                    'La ruta recibida no coincide con el despacho.'
+            ];
+        }
+
+        $registro = [
+            'id_camion' => $camion->id_camion,
+            'id_ruta' => $despacho->id_ruta,
+            'id_cuadrilla' => $camion->id_cuadrilla,
             'fecha_inicio' => now(),
-            'tipo' => $datos['tipo'] ?? ($camion->tipo ?? 'general'),
+            'tipo' => $datos['tipo'] ?? $camion->tipo,
             'volumen_recolectado' => 0,
             'peso_recolectado_kg' => 0,
             'contenedores_recolectados' => 0,
-            'estado' => 'En curso'
-        ]);
+            'contenedores_asignados' => count(
+                json_decode(
+                    $despacho->ids_contenedores ?: '[]',
+                    true
+                ) ?: []
+            ),
+            'distancia_km' =>
+                (float) $despacho->distancia_km,
+            'estado' => 'En curso',
+        ];
+
+        $id = DB::table('recolecciones')
+            ->insertGetId($registro);
+
+        DB::table('ruta_despachos')
+            ->where('id_camion', $camion->id_camion)
+            ->update([
+                'estado' => 'En curso',
+                'updated_at' => now()
+            ]);
+
+        DB::table('camion_asignaciones')
+            ->where('id_camion', $camion->id_camion)
+            ->where('id_ruta', $despacho->id_ruta)
+            ->whereNull('fecha_finalizacion')
+            ->update([
+                'estado_ruta' => 'En curso'
+            ]);
 
         DB::table('camiones')
-            ->where('id_camion', $datos['id_camion'])
+            ->where('id_camion', $camion->id_camion)
             ->update([
                 'estado' => 'Recolectando',
                 'contenedores_recolectados' => 0,
-                'peso_recolectado_kg' => 0
+                'peso_recolectado_kg' => 0,
             ]);
 
+        return [
+            'id' => $id,
+            'nuevo' => true
+        ];
+    }, 3);
+
+    if (isset($resultado['error'])) {
         return response()->json([
-            'success' => true,
-            'message' => 'Recorrido de recolección iniciado.',
-            'data' => [
-                'id_recoleccion' => $idRecoleccion
-            ]
-        ], 201);
+            'success' => false,
+            'message' => $resultado['error']
+        ], 422);
     }
 
-    // Registra contenedor levantado o incidencia (no levantado + motivo) y guarda en el historial del contenedor
-    public function recolectarContenedor(Request $request, int $idRecoleccion)
-    {
-        $datos = $request->validate([
-            'id_contenedor' => 'required|integer|exists:contenedores,id_contenedor',
-            'accion' => 'nullable|string|in:levantado,no_levantado',
-            'motivo' => 'nullable|string|max:180',
-            'descripcion' => 'nullable|string|max:500',
-            'peso_kg' => 'nullable|numeric|min:0'
-        ]);
+    return response()->json([
+        'success' => true,
+        'message' => $resultado['nuevo']
+            ? 'Recorrido iniciado.'
+            : 'Recorrido en curso.',
+        'data' => [
+            'id_recoleccion' => $resultado['id']
+        ],
+    ], $resultado['nuevo'] ? 201 : 200);
+    }
 
-        $recoleccion = DB::table('recolecciones')->where('id_recoleccion', $idRecoleccion)->first();
-        if (!$recoleccion) {
-            return response()->json([
-                'success' => false,
-                'message' => 'Recolección no encontrada.'
-            ], 404);
-        }
 
-        $camion = DB::table('camiones')->where('id_camion', $recoleccion->id_camion)->first();
-        $contenedor = DB::table('contenedores')->where('id_contenedor', $datos['id_contenedor'])->first();
-        $accion = $datos['accion'] ?? 'levantado';
-        $matricula = $camion->matricula ?? ('#' . $recoleccion->id_camion);
-        $pesoSumado = (float) ($datos['peso_kg'] ?? 180);
-        $fechaHoy = now()->toDateString();
-        $idIncidenciaCreada = null;
+    
+    public function recolectarContenedor(
+    Request $request,
+    int $idRecoleccion
+    ) {
+    $datos = $request->validate([
+        'id_contenedor' =>
+            'required|integer|exists:contenedores,id_contenedor',
+        'accion' => 'nullable|in:levantado,no_levantado',
+        'motivo' => 'nullable|string|max:180',
+        'descripcion' => 'nullable|string|max:500',
+        'peso_kg' => 'nullable|numeric|min:0',
+    ]);
 
-        DB::transaction(function () use (
-            $idRecoleccion,
-            $recoleccion,
-            $contenedor,
-            $datos,
-            $accion,
-            $matricula,
-            $pesoSumado,
-            $fechaHoy,
-            &$idIncidenciaCreada
-        ) {
-            $estadoAnterior = $contenedor->estado ?? 'funcional';
+    $resultado = DB::transaction(
+        function () use ($datos, $idRecoleccion) {
+            $rec = DB::table('recolecciones')
+                ->where('id_recoleccion', $idRecoleccion)
+                ->lockForUpdate()
+                ->first();
+
+            if (!$rec) {
+                return [
+                    'error' => 'Recolección no encontrada.',
+                    'status' => 404
+                ];
+            }
+
+            if ($rec->estado !== 'En curso') {
+                return [
+                    'error' =>
+                        'La recolección no está en curso.',
+                    'status' => 422
+                ];
+            }
+
+            $despacho = DB::table('ruta_despachos')
+                ->where('id_camion', $rec->id_camion)
+                ->lockForUpdate()
+                ->first();
+
+            if (!$despacho) {
+                return [
+                    'error' =>
+                        'El camión no tiene despacho activo.',
+                    'status' => 422
+                ];
+            }
+
+            $id = (int) $datos['id_contenedor'];
+
+            $ids = array_map(
+                'intval',
+                json_decode(
+                    $despacho->ids_contenedores ?: '[]',
+                    true
+                ) ?: []
+            );
+
+            if (!in_array($id, $ids, true)) {
+                return [
+                    'error' =>
+                        'El contenedor no pertenece a esta ruta.',
+                    'status' => 422
+                ];
+            }
+
+            $procesados = json_decode(
+                $despacho->contenedores_procesados ?: '{}',
+                true
+            ) ?: [];
+
+            if (isset($procesados[(string) $id])) {
+                $previo = $procesados[(string) $id];
+
+                $contenedor = DB::table('contenedores')
+                    ->where('id_contenedor', $id)
+                    ->first();
+
+                return [
+                    'id_contenedor' => $id,
+                    'accion' =>
+                        $previo['accion'] ?? 'levantado',
+                    'ultimo_registro' =>
+                        $contenedor->ultimo_registro ?? null,
+                    'id_incidencia' =>
+                        $previo['id_incidencia'] ?? null,
+                    'duplicado' => true,
+                ];
+            }
+
+            $camion = DB::table('camiones')
+                ->where('id_camion', $rec->id_camion)
+                ->first();
+
+            $contenedor = DB::table('contenedores')
+                ->where('id_contenedor', $id)
+                ->lockForUpdate()
+                ->first();
+
+            if (
+                !$contenedor ||
+                !(int) $contenedor->activo
+            ) {
+                return [
+                    'error' =>
+                        'El contenedor no está activo.',
+                    'status' => 422
+                ];
+            }
+
+            $accion = $datos['accion'] ?? 'levantado';
+            $motivo = $datos['motivo'] ?? null;
+
+            $obs = trim(
+                (string) ($datos['descripcion'] ?? '')
+            );
+
+            $estadoAnterior =
+                $contenedor->estado ?? 'funcional';
+
+            $matricula = $camion->matricula ??
+                ('#' . $rec->id_camion);
+
+            $idIncidencia = null;
+            $ultimoRegistro = $contenedor->ultimo_registro;
+            $historialMotivo = '';
+            $estadoNuevo = $estadoAnterior;
 
             if ($accion === 'levantado') {
-                DB::table('recoleccion_contenedor')->updateOrInsert(
-                    [
-                        'id_recoleccion' => $idRecoleccion,
-                        'id_contenedor' => $datos['id_contenedor']
-                    ],
-                    [
-                        'fecha' => now()
-                    ]
-                );
+                $yaLevantado = DB::table(
+                    'recoleccion_contenedor'
+                )
+                    ->where(
+                        'id_recoleccion',
+                        $idRecoleccion
+                    )
+                    ->where('id_contenedor', $id)
+                    ->exists();
+
+                if (!$yaLevantado) {
+                    DB::table('recoleccion_contenedor')
+                        ->insert([
+                            'id_recoleccion' =>
+                                $idRecoleccion,
+                            'id_contenedor' => $id,
+                            'fecha' => now(),
+                        ]);
+
+                    $peso = (float) (
+                        $datos['peso_kg'] ?? 180
+                    );
+
+                    DB::table('recolecciones')
+                        ->where(
+                            'id_recoleccion',
+                            $idRecoleccion
+                        )
+                        ->increment(
+                            'peso_recolectado_kg',
+                            $peso
+                        );
+
+                    DB::table('camiones')
+                        ->where(
+                            'id_camion',
+                            $rec->id_camion
+                        )
+                        ->increment(
+                            'peso_recolectado_kg',
+                            $peso
+                        );
+                }
+
+                $ultimoRegistro = now()->toDateString();
+                $estadoNuevo = 'funcional';
 
                 DB::table('contenedores')
-                    ->where('id_contenedor', $datos['id_contenedor'])
+                    ->where('id_contenedor', $id)
                     ->update([
-                        'dias_sin_recoleccion' => 1,
-                        'ultimo_registro' => $fechaHoy,
-                        'estado' => 'funcional'
+                        'dias_sin_recoleccion' => 0,
+                        'ultimo_registro' => $ultimoRegistro,
+                        'estado' => $estadoNuevo,
                     ]);
 
-                $obs = !empty($datos['descripcion']) ? ' (' . $datos['descripcion'] . ')' : '';
-                if (Schema::hasTable('historial_contenedores')) {
-                    DB::table('historial_contenedores')->insert([
-                        'id_contenedor' => $datos['id_contenedor'],
-                        'fecha' => now(),
-                        'estado_anterior' => $estadoAnterior,
-                        'estado_nuevo' => 'funcional',
-                        'id_ubicacion_anterior' => null,
-                        'id_ubicacion_nueva' => null,
-                        'motivo' => 'Limpieza: Levantado por camión ' . $matricula . ' — Última recolección: ' . $fechaHoy . $obs
-                    ]);
-                }
+                $historialMotivo =
+                    'Limpieza por camión ' .
+                    $matricula .
+                    ($obs !== '' ? ': ' . $obs : '');
 
-                if (!empty($datos['motivo'])) {
-                    $idIncidenciaCreada = DB::table('incidencias')->insertGetId([
+                if ($motivo !== null && $motivo !== '') {
+                    $idIncidencia = DB::table(
+                        'incidencias'
+                    )->insertGetId([
                         'tipo_recurso' => 'contenedor',
-                        'id_camion' => $recoleccion->id_camion,
-                        'id_contenedor' => $datos['id_contenedor'],
-                        'id_cuadrilla' => $recoleccion->id_cuadrilla,
-                        'tipo' => $datos['motivo'],
+                        'id_camion' => $rec->id_camion,
+                        'id_contenedor' => $id,
+                        'id_cuadrilla' =>
+                            $rec->id_cuadrilla,
+                        'tipo' => $motivo,
                         'estado' => 'Abierta',
                         'fecha_reporte' => now(),
-                        'descripcion' => 'Levantado con incidencia: ' . $datos['motivo'] . $obs,
-                        'responsable' => 'Camión ' . $matricula
+                        'descripcion' =>
+                            'Levantado con incidencia: ' .
+                            $motivo .
+                            ($obs !== ''
+                                ? ' - ' . $obs
+                                : ''),
+                        'responsable' =>
+                            'Camión ' . $matricula,
                     ]);
                 }
 
-                $totalRecolectados = DB::table('recoleccion_contenedor')
-                    ->where('id_recoleccion', $idRecoleccion)
+                $total = DB::table(
+                    'recoleccion_contenedor'
+                )
+                    ->where(
+                        'id_recoleccion',
+                        $idRecoleccion
+                    )
                     ->count();
 
                 DB::table('recolecciones')
-                    ->where('id_recoleccion', $idRecoleccion)
+                    ->where(
+                        'id_recoleccion',
+                        $idRecoleccion
+                    )
                     ->update([
-                        'contenedores_recolectados' => $totalRecolectados,
-                        'peso_recolectado_kg' => DB::raw("COALESCE(peso_recolectado_kg, 0) + $pesoSumado")
+                        'contenedores_recolectados' =>
+                            $total
                     ]);
 
                 DB::table('camiones')
-                    ->where('id_camion', $recoleccion->id_camion)
+                    ->where(
+                        'id_camion',
+                        $rec->id_camion
+                    )
                     ->update([
-                        'contenedores_recolectados' => $totalRecolectados,
-                        'peso_recolectado_kg' => DB::raw("COALESCE(peso_recolectado_kg, 0) + $pesoSumado")
+                        'contenedores_recolectados' =>
+                            $total
                     ]);
             } else {
-                $motivo = $datos['motivo'] ?? 'No se pudo levantar';
-                $obs = !empty($datos['descripcion']) ? ' — ' . $datos['descripcion'] : '';
-                $nuevoEstado = stripos($motivo, 'roto') !== false ? 'roto' : $estadoAnterior;
+                $motivo = $motivo ?:
+                    'No se pudo levantar';
 
-                if ($nuevoEstado !== $estadoAnterior) {
+                $estadoNuevo = stripos(
+                    $motivo,
+                    'roto'
+                ) !== false
+                    ? 'roto'
+                    : $estadoAnterior;
+
+                if ($estadoNuevo !== $estadoAnterior) {
                     DB::table('contenedores')
-                        ->where('id_contenedor', $datos['id_contenedor'])
-                        ->update(['estado' => $nuevoEstado]);
+                        ->where('id_contenedor', $id)
+                        ->update([
+                            'estado' => $estadoNuevo
+                        ]);
                 }
 
-                $idIncidenciaCreada = DB::table('incidencias')->insertGetId([
+                $idIncidencia = DB::table(
+                    'incidencias'
+                )->insertGetId([
                     'tipo_recurso' => 'contenedor',
-                    'id_camion' => $recoleccion->id_camion,
-                    'id_contenedor' => $datos['id_contenedor'],
-                    'id_cuadrilla' => $recoleccion->id_cuadrilla,
+                    'id_camion' => $rec->id_camion,
+                    'id_contenedor' => $id,
+                    'id_cuadrilla' => $rec->id_cuadrilla,
                     'tipo' => $motivo,
                     'estado' => 'Abierta',
                     'fecha_reporte' => now(),
-                    'descripcion' => 'No levantado por camión ' . $matricula . '. Motivo: ' . $motivo . $obs,
-                    'responsable' => 'Camión ' . $matricula
+                    'descripcion' =>
+                        'No levantado por camión ' .
+                        $matricula .
+                        '. Motivo: ' . $motivo .
+                        ($obs !== ''
+                            ? ' - ' . $obs
+                            : ''),
+                    'responsable' =>
+                        'Camión ' . $matricula,
                 ]);
 
-                if (Schema::hasTable('historial_contenedores')) {
-                    DB::table('historial_contenedores')->insert([
-                        'id_contenedor' => $datos['id_contenedor'],
+                $historialMotivo =
+                    'No levantado por camión ' .
+                    $matricula . ': ' . $motivo;
+            }
+
+            if (Schema::hasTable('historial_contenedores')) {
+                DB::table('historial_contenedores')
+                    ->insert([
+                        'id_contenedor' => $id,
                         'fecha' => now(),
-                        'estado_anterior' => $estadoAnterior,
-                        'estado_nuevo' => $nuevoEstado,
+                        'estado_anterior' =>
+                            $estadoAnterior,
+                        'estado_nuevo' => $estadoNuevo,
                         'id_ubicacion_anterior' => null,
                         'id_ubicacion_nueva' => null,
-                        'motivo' => 'Inspección: Contenedor NO levantado por camión ' . $matricula . ' — Motivo: ' . $motivo . $obs
+                        'motivo' => $historialMotivo,
                     ]);
-                }
             }
-        });
 
-        $despachos = $this->leerDespachos();
-        $keyCamion = (string) $recoleccion->id_camion;
-        if (isset($despachos[$keyCamion])) {
-            $despachos[$keyCamion]['contenedores_procesados'][(string) $datos['id_contenedor']] = [
+            $procesados[(string) $id] = [
                 'accion' => $accion,
-                'motivo' => $datos['motivo'] ?? null,
-                'fecha' => now()->toIso8601String()
+                'motivo' => $motivo,
+                'fecha' => now()->toIso8601String(),
+                'id_incidencia' => $idIncidencia,
             ];
-            if ($idIncidenciaCreada) {
-                $despachos[$keyCamion]['incidencias_creadas'] = (int) ($despachos[$keyCamion]['incidencias_creadas'] ?? 0) + 1;
-            }
-            $this->guardarDespachos($despachos);
-        }
 
-        return response()->json([
-            'success' => true,
-            'message' => $accion === 'levantado'
-                ? 'Contenedor levantado e historial guardado.'
-                : 'Incidencia registrada en el contenedor.',
-            'data' => [
-                'id_contenedor' => (int) $datos['id_contenedor'],
+            DB::table('ruta_despachos')
+                ->where('id_camion', $rec->id_camion)
+                ->update([
+                    'contenedores_procesados' =>
+                        json_encode(
+                            (object) $procesados,
+                            JSON_UNESCAPED_UNICODE
+                        ),
+                    'incidencias_creadas' =>
+                        (int) $despacho->incidencias_creadas +
+                        ($idIncidencia ? 1 : 0),
+                    'updated_at' => now(),
+                ]);
+
+            return [
+                'id_contenedor' => $id,
                 'accion' => $accion,
-                'ultimo_registro' => $fechaHoy,
-                'id_incidencia' => $idIncidenciaCreada
-            ]
-        ]);
+                'ultimo_registro' => $ultimoRegistro,
+                'id_incidencia' => $idIncidencia,
+                'duplicado' => false,
+            ];
+        },
+        3
+    );
+
+    if (isset($resultado['error'])) {
+        return response()->json([
+            'success' => false,
+            'message' => $resultado['error'],
+        ], $resultado['status']);
     }
 
-    // Actualiza la posición GPS del camión durante el recorrido
+    $resultado['incidencia_violeta'] = DB::table('incidencias')
+        ->where('tipo_recurso', 'contenedor')
+        ->where('id_contenedor', $resultado['id_contenedor'])
+        ->whereIn('estado', ['Abierta', 'En curso'])
+        ->exists();
+
+    return response()->json([
+        'success' => true,
+        'message' => $resultado['duplicado']
+            ? 'El contenedor ya estaba procesado en este recorrido.'
+            : (
+                $resultado['accion'] === 'levantado'
+                    ? 'Contenedor levantado e historial guardado.'
+                    : 'Incidencia registrada en el contenedor.'
+            ),
+        'data' => $resultado,
+    ]);
+    }
+
+
     public function actualizarGpsCamion(Request $request, int $idCamion)
     {
         $datos = $request->validate([
-            'latitud' => 'required|numeric',
-            'longitud' => 'required|numeric',
-            'estado' => 'nullable|string|max:50'
+            'latitud' => 'required|numeric|between:-90,90',
+            'longitud' => 'required|numeric|between:-180,180'
         ]);
 
-        $campos = [
-            'gps' => $datos['latitud'] . ', ' . $datos['longitud']
-        ];
+        $camion = DB::table('camiones')
+            ->where('id_camion', $idCamion)
+            ->where('activo', 1)
+            ->first();
+        if (!$camion) {
+            return response()->json([
+                'success' => false,
+                'message' => 'Camión activo no encontrado.'
+            ], 404);
+        }
 
-        if (!empty($datos['estado'])) {
-            $campos['estado'] = $datos['estado'];
+        $idUsuario = auth('api')->user()->id_usuario ?? null;
+        if (!$idUsuario || (int) $camion->id_chofer !== (int) $idUsuario) {
+            return response()->json([
+                'success' => false,
+                'message' => 'El camión no corresponde al chofer autenticado.'
+            ], 403);
+        }
+
+        $tieneRecorrido = DB::table('recolecciones')
+            ->where('id_camion', $idCamion)
+            ->where('estado', 'En curso')
+            ->exists();
+        if (!$tieneRecorrido) {
+            return response()->json([
+                'success' => false,
+                'message' => 'No hay una recolección activa para actualizar GPS.'
+            ], 409);
         }
 
         DB::table('camiones')
             ->where('id_camion', $idCamion)
-            ->update($campos);
+            ->whereExists(function ($query) {
+                $query->selectRaw('1')
+                    ->from('recolecciones as r_activa')
+                    ->whereColumn('r_activa.id_camion', 'camiones.id_camion')
+                    ->where('r_activa.estado', 'En curso');
+            })
+            ->update([
+                'gps' => $datos['latitud'] . ', ' . $datos['longitud']
+            ]);
 
         return response()->json([
             'success' => true,
-            'message' => 'Ubicación GPS actualizada.'
+            'message' => 'Ubicación GPS recibida.'
         ]);
     }
 
-    // Finaliza el recorrido cuando el camión descarga en el vertedero y vuelve a la base
-    public function finalizarRecoleccion(Request $request, int $idRecoleccion)
-    {
-        $recoleccion = DB::table('recolecciones')->where('id_recoleccion', $idRecoleccion)->first();
-        if (!$recoleccion) {
-            return response()->json([
-                'success' => false,
-                'message' => 'Recolección no encontrada.'
-            ], 404);
-        }
+    public function finalizarRecoleccion(
+    Request $request,
+    int $idRecoleccion
+    ) {
+    $resultado = DB::transaction(
+        function () use ($idRecoleccion) {
+            $rec = DB::table('recolecciones')
+                ->where('id_recoleccion', $idRecoleccion)
+                ->lockForUpdate()
+                ->first();
 
-        DB::transaction(function () use ($idRecoleccion, $recoleccion) {
+            if (!$rec) {
+                return [
+                    'error' => 'Recolección no encontrada.',
+                    'status' => 404
+                ];
+            }
+
+            if ($rec->estado === 'Finalizada') {
+                return ['finalizada' => true];
+            }
+
+            if ($rec->estado !== 'En curso') {
+                return [
+                    'error' => 'La recolección no está en curso.',
+                    'status' => 422
+                ];
+            }
+
+            $camion = DB::table('camiones')
+                ->where('id_camion', $rec->id_camion)
+                ->lockForUpdate()
+                ->first();
+
             DB::table('recolecciones')
                 ->where('id_recoleccion', $idRecoleccion)
                 ->update([
@@ -554,44 +1046,124 @@ private function guardarHistorial(array $historial): void
                     'estado' => 'Finalizada'
                 ]);
 
+            DB::table('ruta_despachos')
+                ->where('id_camion', $rec->id_camion)
+                ->where('id_ruta', $rec->id_ruta)
+                ->delete();
+
+            DB::table('camion_asignaciones')
+                ->where('id_camion', $rec->id_camion)
+                ->whereNull('fecha_finalizacion')
+                ->update([
+                    'fecha_finalizacion' => now(),
+                    'estado' => 'Finalizada',
+                    'estado_ruta' => 'Finalizada'
+                ]);
+
             DB::table('camiones')
-                ->where('id_camion', $recoleccion->id_camion)
+                ->where('id_camion', $rec->id_camion)
                 ->update([
                     'estado' => 'En base',
-                    'peso_recolectado_kg' => 0
+                    'id_ruta' => null,
+                    'peso_recolectado_kg' => 0,
+                    'km_en_turno' => 0,
+                    'contenedores_asignados' => 0,
+                    'contenedores_recolectados' => 0,
                 ]);
-        });
-        // Guardar el registro en el historial JSON
-        $datosHistorial = $request->all();
-        if (!empty($datosHistorial)) {
-            $datosHistorial['id_recoleccion'] = $idRecoleccion;
-            $datosHistorial['id_camion'] = $recoleccion->id_camion;
-            $historial = $this->leerHistorial();
-            $historial[] = $datosHistorial;
-            $this->guardarHistorial($historial);
-        }
 
-        // Liberar el despacho activo del camión para que la ruta desaparezca
-        $despachos = $this->leerDespachos();
-        $keyCamion = (string) $recoleccion->id_camion;
-        if (isset($despachos[$keyCamion])) {
-            unset($despachos[$keyCamion]);
-            $this->guardarDespachos($despachos);
-        }
-        
+            if (
+                $camion &&
+                (
+                    $camion->id_chofer !== null ||
+                    $camion->id_cuadrilla !== null
+                )
+            ) {
+                DB::table('camion_asignaciones')->insert([
+                    'id_camion' => $camion->id_camion,
+                    'id_chofer' => $camion->id_chofer,
+                    'id_cuadrilla' => $camion->id_cuadrilla,
+                    'id_ruta' => null,
+                    'fecha_asignacion' => now(),
+                    'fecha_finalizacion' => null,
+                    'estado' => 'Activa',
+                    'estado_ruta' => null,
+                ]);
+            }
 
+            return ['finalizada' => true];
+        },
+        3
+    );
+
+    if (isset($resultado['error'])) {
         return response()->json([
-            'success' => true,
-            'message' => 'Recolección finalizada.'
-        ]);
+            'success' => false,
+            'message' => $resultado['error']
+        ], $resultado['status']);
+    }
+
+    return response()->json([
+        'success' => true,
+        'message' => 'Recolección finalizada.'
+    ]);
     }
     
-    // GET /api/chofer/historial-rutas?id_camion=X
-public function historialRutasChofer(Request $request)
+    public function historialRutasChofer(Request $request)
     {
-        $historial = $this->leerHistorial();
-        // Opcional: filtrar por id_camion o devolver los últimos recorridos
-        return response()->json(['success' => true, 'data' => array_reverse($historial)]);
+        $idCamion = $request->query('id_camion');
+        $idChofer = $request->query('id_chofer');
+        $tieneAsignados = Schema::hasColumn('recolecciones', 'contenedores_asignados');
+        $tieneDistancia = Schema::hasColumn('recolecciones', 'distancia_km');
+
+        $query = DB::table('recolecciones as rec')
+            ->leftJoin('camiones as c', 'c.id_camion', '=', 'rec.id_camion')
+            ->leftJoin('rutas as r', 'r.id_ruta', '=', 'rec.id_ruta')
+            ->select(
+                'rec.id_recoleccion',
+                'rec.id_camion',
+                'rec.fecha_inicio',
+                'rec.fecha_fin',
+                'rec.estado',
+                'rec.contenedores_recolectados',
+                $tieneAsignados
+                    ? 'rec.contenedores_asignados'
+                    : DB::raw('rec.contenedores_recolectados AS contenedores_asignados'),
+                $tieneDistancia
+                    ? 'rec.distancia_km'
+                    : DB::raw('0 AS distancia_km'),
+                'c.matricula',
+                'c.id_chofer',
+                'r.circuito'
+            )
+            ->whereNotNull('rec.fecha_fin')
+            ->orderByDesc('rec.fecha_fin');
+
+        if ($idCamion) {
+            $query->where('rec.id_camion', (int) $idCamion);
+        } elseif ($idChofer) {
+            $query->where('c.id_chofer', (int) $idChofer);
+        }
+
+        $historial = $query->limit(50)->get()->map(function ($fila) {
+            $inicio = $fila->fecha_inicio ? \Carbon\Carbon::parse($fila->fecha_inicio) : null;
+            $fin = $fila->fecha_fin ? \Carbon\Carbon::parse($fila->fecha_fin) : null;
+            $minutos = ($inicio && $fin) ? max(1, $inicio->diffInMinutes($fin)) : 0;
+            $asignados = max((int) $fila->contenedores_asignados, (int) $fila->contenedores_recolectados);
+
+            return [
+                'id' => (int) $fila->id_recoleccion,
+                'fecha' => $fin ? $fin->format('d/m/Y H:i') : null,
+                'circuito' => $fila->circuito ?: 'Sin circuito',
+                'estado' => $fila->estado ?: 'Finalizada',
+                'levantados' => (int) $fila->contenedores_recolectados,
+                'noLevantados' => max(0, $asignados - (int) $fila->contenedores_recolectados),
+                'kmRecorridos' => number_format((float) $fila->distancia_km, 1, ',', '.') . ' km',
+                'duracion' => $minutos >= 60
+                    ? floor($minutos / 60) . 'h ' . ($minutos % 60) . 'm'
+                    : $minutos . ' min',
+            ];
+        });
+
+        return response()->json(['success' => true, 'data' => $historial]);
     }
 }
-

@@ -5,7 +5,6 @@ namespace App\Models;
 use Illuminate\Foundation\Auth\User as Authenticatable;
 use Tymon\JWTAuth\Contracts\JWTSubject;
 
-// Modelo de credenciales ('datos') que implementa JWTSubject para validar tokens JWT.
 class Dato extends Authenticatable implements JWTSubject
 {
     protected $table = 'datos';
@@ -35,13 +34,11 @@ class Dato extends Authenticatable implements JWTSubject
         );
     }
 
-    // Devuelve el identificador único que viaja dentro del token JWT.
     public function getJWTIdentifier()
     {
         return $this->getKey();
     }
 
-    // Datos personalizados que se incluyen en el payload del token JWT.
     public function getJWTCustomClaims(): array
     {
         $this->loadMissing('usuario.rol');

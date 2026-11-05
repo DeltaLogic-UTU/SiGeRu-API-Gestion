@@ -53,6 +53,49 @@ class IncidenciaController extends Controller
         ]);
     }
 
+    public function store(Request $request)
+    {
+    $datos = $request->validate([
+        'tipo_recurso' => [
+            'required',
+            Rule::in(['camion'])
+        ],
+        'id_camion' => [
+            'required',
+            'integer',
+            Rule::exists('camiones', 'id_camion')
+        ],
+        'tipo' => [
+            'required',
+            'string',
+            'max:100'
+        ],
+        'descripcion' => [
+            'required',
+            'string',
+            'max:1000'
+        ]
+    ]);
+
+    $id = DB::table('incidencias')->insertGetId([
+        'tipo_recurso' => 'camion',
+        'id_camion' => $datos['id_camion'],
+        'id_contenedor' => null,
+        'tipo' => $datos['tipo'],
+        'descripcion' => $datos['descripcion'],
+        'estado' => 'Abierta',
+        'fecha_reporte' => now()
+    ]);
+
+    return response()->json([
+        'success' => true,
+        'message' => 'Incidencia registrada correctamente.',
+        'data' => $this->formatearIncidencia(
+            $this->obtenerIncidencia($id)
+        )
+    ], 201);
+    }
+
 
     public function show(int $id)
     {

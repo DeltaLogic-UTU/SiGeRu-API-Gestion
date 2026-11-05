@@ -686,141 +686,147 @@ class CuadrillaController extends Controller
         ]);
     }
 
-    public function historiales(string $id)
+    
+    public function historiales(Request $request, string $id)
     {
-        Cuadrilla::findOrFail($id);
+    $dato = $request->user('api');
 
-        $limpieza = DB::table('cuadrilla_rutas as cr')
-            ->join(
-                'rutas as r',
-                'cr.id_ruta',
-                '=',
-                'r.id_ruta'
-            )
-            ->where('cr.id_cuadrilla', $id)
-            ->select(
-                'r.circuito',
-                'cr.prioridad',
-                'cr.fecha_asignacion',
-                'cr.fecha_finalizacion',
-                'cr.estado'
-            )
-            ->orderBy('cr.fecha_asignacion')
-            ->get()
-            ->map(fn ($item) => [
-                'circuito' => $item->circuito,
-                'prioridad' => $item->prioridad,
-
-                'asignacion' =>
-                    $this->formatearFecha($item->fecha_asignacion),
-
-                'finalizacion' =>
-                    $item->fecha_finalizacion
-                        ? $this->formatearFecha($item->fecha_finalizacion)
-                        : 'Pendiente',
-
-                'estado' => $item->estado
-            ])
-            ->values();
-
-        $reclamos = DB::table('reclamos')
-            ->where('id_cuadrilla', $id)
-            ->select(
-                'id_reclamo',
-                'estado',
-                'fecha_reporte',
-                'fecha_finalizacion'
-            )
-            ->orderBy('fecha_reporte')
-            ->get()
-            ->map(fn ($item) => [
-                'reclamo' => $item->id_reclamo,
-
-                'asignacion' =>
-                    $this->formatearFecha($item->fecha_reporte),
-
-                'finalizacion' =>
-                    $item->fecha_finalizacion
-                        ? $this->formatearFecha($item->fecha_finalizacion)
-                        : 'Pendiente',
-
-                'estado' => $item->estado
-            ])
-            ->values();
-
-        $incidenciasBD = DB::table('incidencias')
-            ->where('id_cuadrilla', $id)
-            ->select(
-                'id_incidencia',
-                'tipo',
-                'estado',
-                'fecha_reporte',
-                'fecha_resolucion',
-                'descripcion',
-                'resolucion'
-            )
-            ->orderBy('fecha_reporte')
-            ->orderBy('id_incidencia')
-            ->get();
-
-        $codigoCuadrilla = strtoupper(
-            str_replace(
-                [
-                    '-',
-                    '_'
-                ],
-                '',
-                $id
-            )
-        );
-
-        $incidencias = $incidenciasBD
-            ->values()
-            ->map(function ($item, $index) use ($codigoCuadrilla) {
-                return [
-                    'id_incidencia' =>
-                        (int) $item->id_incidencia,
-
-                    'codigo' =>
-                        'INC-' .
-                        $codigoCuadrilla .
-                        '-' .
-                        str_pad(
-                            $index + 1,
-                            2,
-                            '0',
-                            STR_PAD_LEFT
-                        ),
-
-                    'tipo' => $item->tipo,
-                    'estado' => $item->estado,
-
-                    'reporte' =>
-                        $this->formatearFecha($item->fecha_reporte),
-
-                    'resolucion' =>
-                        $item->fecha_resolucion
-                            ? $this->formatearFecha(
-                                $item->fecha_resolucion
-                            )
-                            : 'Pendiente',
-
-                    'descripcion' => $item->descripcion,
-
-                    'detalle_resolucion' =>
-                        $item->resolucion
-                ];
-            })
-            ->values();
-
+    if (!$dato || !$dato->id_usuario) {
         return response()->json([
-            'success' => true,
-            'data' => [
-                'limpieza' => $limpieza,
-                'reclamos' => $reclamos,
-                'incidencias' => $incidencias
+            'success' => false,
+            'message' => 'Sesión no válida.'
+        ], 401);
+    }
+
+    $usuario = DB::table('usuarios as u')
+        ->join('rol as r', 'r.id_rol', '=', 'u.id_rol')
+        ->where('u.id_usuario', $dato->id_usuario)
+        ->where('u.estado', 'activo')
+        ->select('r.nombre as rol')
+        ->first();
+
+    if (!$usuario) {
+        return response()->json([
+            'success' => false,
+            'message' => 'Usuario no autorizado.'
+        ], 403);
+    }
+
+    $esIntegrante = DB::table('cuadrilla_integrantes')
+        ->where('id_cuadrilla', $id)
+        ->where('id_usuario', $dato->id_usuario)
+        ->whereNull('fecha_finalizacion')
+        ->exists();
+
+    $esResponsable = DB::table('cuadrilla')
+        ->where('id_cuadrilla', $id)
+        ->where('id_responsable', $dato->id_usuario)
+        ->exists();
+
+    $rol = strtolower(trim((string) $usuario->rol));
+
+    $esAdministrador = in_array(
+    $rol,
+    ['admin', 'administrador'],
+    true
+    );
+
+    $esPersonalCuadrilla = in_array(
+    $rol,
+    ['cuadrilla', 'barrendero'],
+    true
+    );
+
+    $puedeConsultar = $esAdministrador ||
+    ($esPersonalCuadrilla && ($esIntegrante || $esResponsable));
+
+    if (!$puedeConsultar) {
+    return response()->json([
+        'success' => false,
+        'message' => 'No tenés permiso para consultar este historial.'
+    ], 403);
+    }
+
+
+    Cuadrilla::findOrFail($id);
+
+    $limpieza = DB::table('cuadrilla_rutas as cr')
+        ->join('rutas as r', 'r.id_ruta', '=', 'cr.id_ruta')
+        ->where('cr.id_cuadrilla', $id)
+        ->where('cr.estado', 'Finalizada')
+        ->whereNotNull('cr.fecha_finalizacion')
+        ->select(
+            'cr.id_asignacion',
+            'r.id_ruta',
+            'r.nombre',
+            'r.circuito',
+            'r.municipio',
+            'cr.prioridad',
+            'cr.fecha_asignacion as asignacion',
+            'cr.fecha_finalizacion as finalizacion',
+            'cr.estado'
+        )
+        ->orderByDesc('cr.fecha_finalizacion')
+        ->get();
+
+    $reclamos = DB::table('reclamos')
+        ->where('id_cuadrilla', $id)
+        ->where('estado', 'completado')
+        ->select(
+            'id_reclamo as reclamo',
+            'tipo',
+            'categoria',
+            'descripcion',
+            'prioridad',
+            'estado',
+            'ubicacion',
+            'zona',
+            'referencia',
+            'id_contenedor',
+            'fecha_reporte as asignacion',
+            'fecha_finalizacion as finalizacion',
+            'resultado',
+            'foto',
+            'foto_resultado'
+        )
+        ->orderByDesc('fecha_finalizacion')
+        ->get();
+
+    $incidencias = DB::table('incidencias')
+        ->where('id_cuadrilla', $id)
+        ->where('estado', 'Resuelta')
+        ->select(
+            'id_incidencia',
+            'tipo',
+            'descripcion',
+            'estado',
+            'id_contenedor',
+            'id_camion',
+            'tipo_recurso',
+            'fecha_reporte as reporte',
+            'fecha_resolucion as resolucion',
+            'resolucion as detalle_resolucion'
+        )
+        ->orderByDesc('fecha_resolucion')
+        ->get();
+
+    return response()->json([
+        'success' => true,
+        'data' => [
+            'limpieza' => $limpieza,
+            'reclamos' => $reclamos,
+            'incidencias' => $incidencias,
+            'resumen' => [
+                'limpiezas_completadas' => $limpieza->count(),
+                'reclamos_completados' => $reclamos->count(),
+                'incidencias_resueltas' => $incidencias->count(),
+                'total_completados' =>
+                    $limpieza->count() +
+                    $reclamos->count() +
+                    $incidencias->count()
             ]
-        ]);
+        ]
+    ]);
     }
 
     private function esBarrenderoActivo(
