@@ -942,6 +942,18 @@ class CamionController extends Controller
                 'u.id_usuario'
             )
             ->leftJoin(
+                'chofer as ch',
+                'c.id_chofer',
+                '=',
+                'ch.id_usuario'
+            )
+            ->leftJoin(
+                'datos as d',
+                'c.id_chofer',
+                '=',
+                'd.id_usuario'
+            )
+            ->leftJoin(
                 'rutas as r',
                 'c.id_ruta',
                 '=',
@@ -987,6 +999,9 @@ class CamionController extends Controller
 
                 'u.nombre as chofer_nombre',
                 'u.apellido as chofer_apellido',
+
+                'ch.licencia as chofer_licencia',
+                'd.telefono as chofer_telefono',
 
                 'r.circuito as ruta_circuito',
                 'r.nombre as ruta_nombre',
@@ -1098,6 +1113,9 @@ class CamionController extends Controller
                     ? $chofer
                     : null,
 
+            'chofer_licencia' => $item->chofer_licencia ?? null,
+            'chofer_telefono' => $item->chofer_telefono ?? null,
+
             'id_cuadrilla' => $item->id_cuadrilla,
 
             'id_ruta' =>
@@ -1182,54 +1200,54 @@ class CamionController extends Controller
 
     public function mapaPublico()
     {
-    $camiones = DB::table('camiones as c')
-        ->where('c.activo', 1)
-        ->whereNotNull('c.gps')
-        ->whereExists(function ($consulta) {
-            $consulta->selectRaw('1')
-                ->from('recolecciones as r')
-                ->whereColumn('r.id_camion', 'c.id_camion')
-                ->where('r.estado', 'En curso');
-        })
-        ->select('c.gps')
-        ->get();
+        $camiones = DB::table('camiones as c')
+            ->where('c.activo', 1)
+            ->whereNotNull('c.gps')
+            ->whereExists(function ($consulta) {
+                $consulta->selectRaw('1')
+                    ->from('recolecciones as r')
+                    ->whereColumn('r.id_camion', 'c.id_camion')
+                    ->where('r.estado', 'En curso');
+            })
+            ->select('c.gps')
+            ->get();
 
-    $posiciones = [];
+        $posiciones = [];
 
-    foreach ($camiones as $camion) {
-        $partes = array_map(
-            'trim',
-            explode(',', (string) $camion->gps)
-        );
+        foreach ($camiones as $camion) {
+            $partes = array_map(
+                'trim',
+                explode(',', (string) $camion->gps)
+            );
 
-        if (
-            count($partes) !== 2 ||
-            !is_numeric($partes[0]) ||
-            !is_numeric($partes[1])
-        ) {
-            continue;
+            if (
+                count($partes) !== 2 ||
+                !is_numeric($partes[0]) ||
+                !is_numeric($partes[1])
+            ) {
+                continue;
+            }
+
+            $latitud = (float) $partes[0];
+            $longitud = (float) $partes[1];
+
+            if (
+                abs($latitud) > 90 ||
+                abs($longitud) > 180 ||
+                ($latitud === 0.0 && $longitud === 0.0)
+            ) {
+                continue;
+            }
+
+            $posiciones[] = [
+                'latitud' => $latitud,
+                'longitud' => $longitud
+            ];
         }
 
-        $latitud = (float) $partes[0];
-        $longitud = (float) $partes[1];
-
-        if (
-            abs($latitud) > 90 ||
-            abs($longitud) > 180 ||
-            ($latitud === 0.0 && $longitud === 0.0)
-        ) {
-            continue;
-        }
-
-        $posiciones[] = [
-            'latitud' => $latitud,
-            'longitud' => $longitud
-        ];
-    }
-
-    return response()->json([
-        'success' => true,
-        'data' => $posiciones
-    ]);
+        return response()->json([
+            'success' => true,
+            'data' => $posiciones
+        ]);
     }
 }
