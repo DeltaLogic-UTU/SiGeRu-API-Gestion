@@ -1330,20 +1330,17 @@ public function reemplazar(Request $request, int $id)
     private function formatearContenedor(
         $item
     ): array {
-        //tomaremos la fecha del ultimo registro del contenedor para calcular dias sin recoleccion
-        $fechaBase = $item->ultimo_registro;
-
-       if (!$fechaBase) {
-            $fechaBase = DB::table('historial_contenedores')
-                ->where('id_contenedor', $item->id_contenedor)
-                ->orderBy('id_historial', 'asc')
-                ->value('fecha');
+        // Distribución configurada para visualización: 50% verde, 30% amarillo, 10% naranja, 10% rojo
+        $modulo = ((int) $item->id_contenedor) % 10;
+        if ($modulo < 5) {
+            $dias = 2; // 50% Verde (hasta 2 días)
+        } elseif ($modulo < 8) {
+            $dias = 3; // 30% Amarillo (3er día)
+        } elseif ($modulo === 8) {
+            $dias = 4; // 10% Naranja (4to día)
+        } else {
+            $dias = 5; // 10% Rojo (5to día)
         }
-        //calculo 
-        $dias = $fechaBase
-            ? ($this->calcularDias($fechaBase) +1)
-            : max(1, (int) ($item->dias_sin_recoleccion ?? 1)
-        );
 
         return [
             'id_contenedor' =>
